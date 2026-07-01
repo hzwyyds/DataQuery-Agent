@@ -1,0 +1,92 @@
+:root {
+  color: #1d211f;
+  background: #f3f4ef;
+  font-family: "Aptos", "Segoe UI", sans-serif;
+  font-synthesis: none;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+}
+
+button,
+input,
+textarea {
+  font: inherit;
+}
+
+.shell {
+  min-height: 100vh;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  height: 64px;
+  padding: 0 28px;
+  border-bottom: 1px solid #d8dbd4;
+  background: #fafbf7;
+}
+
+.brand div {
+  display: grid;
+  gap: 2px;
+}
+
+.brand strong {
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 18px;
+}
+
+.brand span:last-child {
+  color: #727972;
+  font-size: 12px;
+}
+
+.mark {
+  display: grid;
+  width: 36px;
+  height: 36px;
+  place-items: center;
+  color: #effaf0;
+  background: #245c45;
+  border-radius: 6px;
+}
+
+.empty {
+  display: grid;
+  max-width: 720px;
+  min-height: calc(100vh - 64px);
+  align-content: center;
+  padding: 48px clamp(28px, 8vw, 96px);
+}
+
+.empty p {
+  margin: 0 0 18px;
+  color: #b34a32;
+  font: 700 12px/1.2 ui-monospace, "Cascadia Code", monospace;
+  letter-spacing: 0;
+}
+
+.empty h1 {
+  max-width: 620px;
+  margin: 0;
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: clamp(42px, 7vw, 76px);
+  font-weight: 500;
+  line-height: 0.98;
+  letter-spacing: 0;
+}
+
+.empty > span {
+  margin-top: 24px;
+  color: #687069;
+  font-size: 15px;
+}
