@@ -249,6 +249,24 @@ class Repository:
             )
             await connection.commit()
 
+    async def update_column_annotation(
+        self, workspace_id: str, column_id: str, description: str, aliases: list[str]
+    ) -> dict:
+        async with self.connect() as connection:
+            cursor = await connection.execute(
+                """UPDATE catalog_columns SET description = ?, aliases = ?
+                   WHERE id = ? AND workspace_id = ?""",
+                (description, json.dumps(aliases), column_id, workspace_id),
+            )
+            if cursor.rowcount != 1:
+                raise KeyError("column not found")
+            await connection.commit()
+        for table in await self.catalog(workspace_id):
+            for column in table["columns"]:
+                if column["id"] == column_id:
+                    return {**column, "source_id": table["source_id"]}
+        raise KeyError("column not found")
+
     async def list_sources(self, workspace_id: str) -> list[dict]:
         async with self.connect() as connection:
             cursor = await connection.execute(

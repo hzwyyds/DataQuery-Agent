@@ -47,6 +47,13 @@ def test_workspace_upload_catalog_and_delete(tmp_path: Path, monkeypatch) -> Non
         catalog = client.get(f"/api/v1/workspaces/{workspace_id}/catalog")
         assert catalog.status_code == 200
         assert catalog.json()["tables"][0]["row_count"] == 2
+        column_id = catalog.json()["tables"][0]["columns"][0]["id"]
+        annotation = client.patch(
+            f"/api/v1/workspaces/{workspace_id}/catalog/columns/{column_id}",
+            json={"description": "Sales territory", "aliases": ["market", "market"]},
+        )
+        assert annotation.status_code == 200
+        assert annotation.json()["aliases"] == ["market"]
 
         deleted = client.delete(f"/api/v1/workspaces/{workspace_id}/sources/{source_id}")
         assert deleted.status_code == 204

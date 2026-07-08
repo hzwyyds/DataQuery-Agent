@@ -6,7 +6,7 @@ from uuid import uuid4
 from fastapi import APIRouter, File, HTTPException, UploadFile
 from fastapi.responses import Response
 
-from app.api.schemas import SourceView, WorkspaceCreate, WorkspaceView
+from app.api.schemas import ColumnAnnotation, SourceView, WorkspaceCreate, WorkspaceView
 from app.core.config import settings
 from app.data.ingestion import SUPPORTED_SUFFIXES, IngestionService
 from app.data.repository import repository
@@ -90,9 +90,7 @@ async def upload_file(workspace_id: str, file: UploadFile = File(...)):
                 stream.write(chunk)
         if storage.workspace_bytes(workspace_id) > settings.max_workspace_bytes:
             raise HTTPException(status_code=413, detail="workspace exceeds the 200 MB limit")
-        await repository.add_source(
-            workspace_id, source_id, original_name, stored_name, size
-        )
+        await repository.add_source(workspace_id, source_id, original_name, stored_name, size)
         await ingestion.ingest(workspace_id, source_id, target, original_name)
         await rag.index_source(workspace_id, source_id)
         return await repository.get_source(source_id)
@@ -152,3 +150,15 @@ async def reindex_workspace(workspace_id: str):
     results = [await rag.index_source(workspace_id, source["id"]) for source in sources]
     return {"sources": len(results), "results": results}
 
+
+@router.patch("/workspaces/{workspace_id}/catalog/columns/{column_id}")
+async def update_column_annotation(workspace_id: str, column_id: str, payload: ColumnAnnotation):
+    aliases = list(dict.fromkeys(item.strip()[:80] for item in payload.aliases if item.strip()))
+    try:
+        column = await repository.update_column_annotation(
+            workspace_id, column_id, payload.description.strip(), aliases
+        )
+    except KeyError as exc:
+        raise not_found(exc) from exc
+    await rag.index_source(workspace_id, column.pop("source_id"))
+    return column

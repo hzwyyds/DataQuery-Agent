@@ -104,3 +104,44 @@ def test_index_and_retrieve_catalog_with_explicit_fallback(tmp_path: Path) -> No
 
     asyncio.run(run())
 
+
+def test_column_annotation_is_retrievable(tmp_path: Path) -> None:
+    async def run() -> None:
+        repository = Repository(tmp_path / "metadata.sqlite3")
+        await repository.initialize()
+        workspace = await repository.create_workspace("Annotations")
+        source_id = str(uuid4())
+        await repository.add_source(workspace["id"], source_id, "x.csv", "x.csv", 1)
+        column_id = str(uuid4())
+        await repository.replace_catalog(
+            source_id,
+            [
+                {
+                    "id": str(uuid4()),
+                    "workspace_id": workspace["id"],
+                    "physical_name": "orders",
+                    "display_name": "orders",
+                    "row_count": 1,
+                    "columns": [
+                        {
+                            "id": column_id,
+                            "name": "gmv",
+                            "data_type": "DOUBLE",
+                            "ordinal": 0,
+                            "null_count": 0,
+                            "distinct_count": 1,
+                            "sample_values": [120],
+                        }
+                    ],
+                }
+            ],
+        )
+        updated = await repository.update_column_annotation(
+            workspace["id"], column_id, "Gross merchandise value", ["sales amount"]
+        )
+        assert updated["source_id"] == source_id
+        catalog = await repository.catalog(workspace["id"])
+        matches = RAGService.lexical_matches("sales amount", catalog, 8)
+        assert matches[0]["column_id"] == column_id
+
+    asyncio.run(run())

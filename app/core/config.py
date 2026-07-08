@@ -24,6 +24,10 @@ class Settings:
     embedding_timeout_seconds: float = float(os.getenv("EMBEDDING_TIMEOUT_SECONDS", "20"))
     retrieval_limit: int = int(os.getenv("RETRIEVAL_LIMIT", "8"))
     retrieval_score_threshold: float = float(os.getenv("RETRIEVAL_SCORE_THRESHOLD", "0.35"))
+    llm_api_key: str = os.getenv("LLM_API_KEY", "")
+    llm_model: str = os.getenv("LLM_MODEL", "deepseek-chat")
+    llm_base_url: str = os.getenv("LLM_BASE_URL", "https://api.deepseek.com")
+    llm_timeout_seconds: float = float(os.getenv("LLM_TIMEOUT_SECONDS", "30"))
 
     @property
     def database_path(self) -> Path:

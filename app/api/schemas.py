@@ -26,3 +26,8 @@ class SourceView(BaseModel):
     index_status: str
     index_error: str | None = None
     created_at: str
+
+
+class ColumnAnnotation(BaseModel):
+    description: str = Field(default="", max_length=500)
+    aliases: list[str] = Field(default_factory=list, max_length=20)
