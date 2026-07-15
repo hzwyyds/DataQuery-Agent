@@ -5,12 +5,12 @@ import re
 from decimal import Decimal, InvalidOperation
 
 from app.agent.provider import AnswerDraft
-from app.query.contracts import QueryResult
+from app.query.contracts import AnalysisResult, QueryResult
 
 NUMBER = re.compile(r"(?<![A-Za-z_])-?\d+(?:\.\d+)?%?")
 
 
-def build_evidence(result: QueryResult) -> list[dict]:
+def build_evidence(result: QueryResult, analysis: AnalysisResult | None = None) -> list[dict]:
     evidence = [
         {
             "id": "E0",
@@ -27,6 +27,28 @@ def build_evidence(result: QueryResult) -> list[dict]:
                 "fact": json.dumps(row, ensure_ascii=False, sort_keys=True, default=str),
             }
         )
+    if analysis is not None:
+        evidence.append(
+            {
+                "id": "A0",
+                "fact": json.dumps(
+                    {
+                        "operation": analysis.operation,
+                        "metrics": analysis.metrics,
+                    },
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    default=str,
+                ),
+            }
+        )
+        for index, row in enumerate(analysis.rows[:20], 1):
+            evidence.append(
+                {
+                    "id": f"A{index}",
+                    "fact": json.dumps(row, ensure_ascii=False, sort_keys=True, default=str),
+                }
+            )
     return evidence
 
 

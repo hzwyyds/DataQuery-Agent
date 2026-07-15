@@ -23,6 +23,11 @@ def test_workspace_upload_catalog_and_delete(tmp_path: Path, monkeypatch) -> Non
     monkeypatch.setattr(main_module, "repository", repository)
     monkeypatch.setattr(main_module, "WorkspaceStorage", lambda: storage)
 
+    def unconfigured_runtime():
+        raise RuntimeError("LLM_API_KEY is required")
+
+    monkeypatch.setattr(routes, "agent_runtime", unconfigured_runtime)
+
     with TestClient(main_module.app) as client:
         created = client.post(
             "/api/v1/workspaces",
@@ -30,6 +35,24 @@ def test_workspace_upload_catalog_and_delete(tmp_path: Path, monkeypatch) -> Non
         )
         assert created.status_code == 201
         workspace_id = created.json()["id"]
+
+        run = client.post(
+            f"/api/v1/workspaces/{workspace_id}/runs",
+            json={"question": "Show sales by region"},
+        )
+        assert run.status_code == 202
+        assert run.json()["status"] == "FAILED"
+        run_id = run.json()["id"]
+        assert client.get(f"/api/v1/workspaces/{workspace_id}/runs/{run_id}").status_code == 200
+        history = client.get(f"/api/v1/workspaces/{workspace_id}/runs").json()["runs"]
+        assert history[0]["error_code"] == "CONFIGURATION_ERROR"
+        events = client.get(
+            f"/api/v1/workspaces/{workspace_id}/runs/{run_id}/events",
+            headers={"Last-Event-ID": "0"},
+        )
+        assert events.status_code == 200
+        assert "event: failed" in events.text
+        assert "id: 1" in events.text
 
         uploaded = client.post(
             f"/api/v1/workspaces/{workspace_id}/files",

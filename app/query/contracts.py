@@ -19,6 +19,24 @@ class QueryResult(BaseModel):
     scope: QueryScope
 
 
+class AnalysisResult(BaseModel):
+    operation: str
+    columns: list[str]
+    rows: list[dict[str, Any]] = Field(default_factory=list)
+    metrics: dict[str, Any] = Field(default_factory=dict)
+
+
+class ChartResult(BaseModel):
+    type: Literal["line", "bar", "scatter"]
+    x: str
+    y: list[str]
+    series: str | None = None
+    data: list[dict[str, Any]]
+    source_points: int
+    displayed_points: int
+    downsampled: bool
+
+
 class AnalysisSpec(BaseModel):
     operation: Literal["describe", "group_aggregate", "correlation", "trend", "outlier_iqr"]
     columns: list[str] = Field(default_factory=list, max_length=12)

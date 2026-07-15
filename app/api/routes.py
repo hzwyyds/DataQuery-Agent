@@ -1,22 +1,49 @@
 from __future__ import annotations
 
+import asyncio
+import json
 from pathlib import Path
 from uuid import uuid4
 
-from fastapi import APIRouter, File, HTTPException, UploadFile
-from fastapi.responses import Response
+from fastapi import APIRouter, BackgroundTasks, File, Header, HTTPException, Request, UploadFile
+from fastapi.responses import Response, StreamingResponse
 
-from app.api.schemas import ColumnAnnotation, SourceView, WorkspaceCreate, WorkspaceView
+from app.agent.graph import AgentRuntime
+from app.agent.provider import OpenAICompatibleProvider
+from app.agent.runs import execute_run
+from app.analysis.chart import ChartService
+from app.analysis.service import AnalysisService
+from app.api.schemas import (
+    ColumnAnnotation,
+    RunCreate,
+    SourceView,
+    WorkspaceCreate,
+    WorkspaceView,
+)
 from app.core.config import settings
 from app.data.ingestion import SUPPORTED_SUFFIXES, IngestionService
 from app.data.repository import repository
 from app.data.storage import WorkspaceStorage, safe_filename
+from app.query.executor import DuckDBQueryExecutor
+from app.query.sql_guard import SQLGuard
 from app.rag.service import RAGService
 
 router = APIRouter(prefix="/api/v1")
 storage = WorkspaceStorage()
 ingestion = IngestionService(repository, storage)
 rag = RAGService(repository)
+
+
+def agent_runtime() -> AgentRuntime:
+    return AgentRuntime(
+        repository=repository,
+        rag=rag,
+        provider=OpenAICompatibleProvider(),
+        executor=DuckDBQueryExecutor(storage),
+        guard=SQLGuard(),
+        analysis=AnalysisService(),
+        charts=ChartService(),
+    )
 
 
 def not_found(exc: KeyError) -> HTTPException:
@@ -162,3 +189,93 @@ async def update_column_annotation(workspace_id: str, column_id: str, payload: C
         raise not_found(exc) from exc
     await rag.index_source(workspace_id, column.pop("source_id"))
     return column
+
+
+@router.post("/workspaces/{workspace_id}/runs", status_code=202)
+async def create_run(workspace_id: str, payload: RunCreate, background: BackgroundTasks):
+    try:
+        run = await repository.create_run(
+            workspace_id, payload.question.strip(), payload.selected_table_ids
+        )
+    except KeyError as exc:
+        raise not_found(exc) from exc
+    try:
+        runtime = agent_runtime()
+    except RuntimeError:
+        await repository.fail_run(
+            run["id"], "CONFIGURATION_ERROR", "The language model is not configured"
+        )
+        await repository.append_event(
+            run["id"],
+            "failed",
+            "The language model is not configured",
+            {"error_code": "CONFIGURATION_ERROR"},
+            level="error",
+        )
+        return await repository.get_run(workspace_id, run["id"])
+    background.add_task(
+        execute_run,
+        repository,
+        runtime,
+        run["id"],
+        workspace_id,
+        payload.question.strip(),
+        payload.selected_table_ids,
+    )
+    return run
+
+
+@router.get("/workspaces/{workspace_id}/runs")
+async def list_runs(workspace_id: str, limit: int = 50):
+    try:
+        await repository.get_workspace(workspace_id)
+    except KeyError as exc:
+        raise not_found(exc) from exc
+    return {"runs": await repository.list_runs(workspace_id, limit)}
+
+
+@router.get("/workspaces/{workspace_id}/runs/{run_id}")
+async def get_run(workspace_id: str, run_id: str):
+    try:
+        return await repository.get_run(workspace_id, run_id)
+    except KeyError as exc:
+        raise not_found(exc) from exc
+
+
+@router.get("/workspaces/{workspace_id}/runs/{run_id}/events")
+async def stream_run_events(
+    workspace_id: str,
+    run_id: str,
+    request: Request,
+    after: int = 0,
+    last_event_id: str | None = Header(default=None, alias="Last-Event-ID"),
+):
+    try:
+        await repository.get_run(workspace_id, run_id)
+    except KeyError as exc:
+        raise not_found(exc) from exc
+    try:
+        cursor = max(after, int(last_event_id or 0))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Last-Event-ID must be an integer") from exc
+
+    async def events():
+        nonlocal cursor
+        while True:
+            batch = await repository.list_events(run_id, cursor)
+            for event in batch:
+                cursor = event["sequence"]
+                data = json.dumps(event, ensure_ascii=False, separators=(",", ":"))
+                yield f"id: {cursor}\nevent: {event['phase']}\ndata: {data}\n\n"
+            run = await repository.get_run(workspace_id, run_id)
+            if run["status"] in {"COMPLETED", "FAILED"} and not batch:
+                break
+            if await request.is_disconnected():
+                break
+            await asyncio.sleep(0.25)
+
+    return StreamingResponse(
+        events(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )

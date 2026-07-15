@@ -106,6 +106,14 @@ class Repository:
             await connection.executescript(SCHEMA)
             await connection.commit()
 
+    async def ping(self) -> bool:
+        try:
+            async with self.connect() as connection:
+                cursor = await connection.execute("SELECT 1")
+                return (await cursor.fetchone())[0] == 1
+        except Exception:
+            return False
+
     async def create_workspace(self, name: str, description: str = "") -> dict:
         workspace_id = str(uuid4())
         timestamp = now()
@@ -274,6 +282,114 @@ class Repository:
                 (workspace_id,),
             )
             return [dict(row) for row in await cursor.fetchall()]
+
+    async def create_run(
+        self, workspace_id: str, question: str, selected_table_ids: list[str]
+    ) -> dict:
+        await self.get_workspace(workspace_id)
+        run_id = str(uuid4())
+        async with self.connect() as connection:
+            await connection.execute(
+                """INSERT INTO runs
+                   (id, workspace_id, question, status, payload, created_at)
+                   VALUES (?, ?, ?, 'RUNNING', ?, ?)""",
+                (
+                    run_id,
+                    workspace_id,
+                    question,
+                    json.dumps({"selected_table_ids": selected_table_ids}),
+                    now(),
+                ),
+            )
+            await connection.commit()
+        return await self.get_run(workspace_id, run_id)
+
+    async def get_run(self, workspace_id: str, run_id: str) -> dict:
+        async with self.connect() as connection:
+            cursor = await connection.execute(
+                "SELECT * FROM runs WHERE id = ? AND workspace_id = ?",
+                (run_id, workspace_id),
+            )
+            row = await cursor.fetchone()
+        if row is None:
+            raise KeyError("run not found")
+        result = dict(row)
+        result["payload"] = json.loads(result["payload"])
+        return result
+
+    async def list_runs(self, workspace_id: str, limit: int = 50) -> list[dict]:
+        async with self.connect() as connection:
+            cursor = await connection.execute(
+                """SELECT * FROM runs WHERE workspace_id = ?
+                   ORDER BY created_at DESC LIMIT ?""",
+                (workspace_id, min(max(limit, 1), 100)),
+            )
+            rows = [dict(row) for row in await cursor.fetchall()]
+        for row in rows:
+            row["payload"] = json.loads(row["payload"])
+        return rows
+
+    async def append_event(
+        self,
+        run_id: str,
+        phase: str,
+        message: str,
+        payload: dict | None = None,
+        level: str = "info",
+    ) -> dict:
+        async with self.connect() as connection:
+            await connection.execute("BEGIN IMMEDIATE")
+            cursor = await connection.execute(
+                "SELECT COALESCE(MAX(sequence), 0) + 1 FROM events WHERE run_id = ?",
+                (run_id,),
+            )
+            sequence = (await cursor.fetchone())[0]
+            await connection.execute(
+                """INSERT INTO events
+                   (run_id, sequence, phase, level, message, payload, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    run_id,
+                    sequence,
+                    phase,
+                    level,
+                    message,
+                    json.dumps(payload or {}, ensure_ascii=False, default=str),
+                    now(),
+                ),
+            )
+            await connection.commit()
+        return (await self.list_events(run_id, sequence - 1))[0]
+
+    async def list_events(self, run_id: str, after_sequence: int = 0) -> list[dict]:
+        async with self.connect() as connection:
+            cursor = await connection.execute(
+                """SELECT * FROM events WHERE run_id = ? AND sequence > ?
+                   ORDER BY sequence""",
+                (run_id, max(after_sequence, 0)),
+            )
+            rows = [dict(row) for row in await cursor.fetchall()]
+        for row in rows:
+            row["payload"] = json.loads(row["payload"])
+        return rows
+
+    async def complete_run(self, run_id: str, payload: dict) -> None:
+        async with self.connect() as connection:
+            await connection.execute(
+                """UPDATE runs SET status = 'COMPLETED', payload = ?, completed_at = ?
+                   WHERE id = ?""",
+                (json.dumps(payload, ensure_ascii=False, default=str), now(), run_id),
+            )
+            await connection.commit()
+
+    async def fail_run(self, run_id: str, error_code: str, error_message: str) -> None:
+        async with self.connect() as connection:
+            await connection.execute(
+                """UPDATE runs SET status = 'FAILED', error_code = ?, error_message = ?,
+                   completed_at = ? WHERE id = ?""",
+                (error_code, error_message, now(), run_id),
+            )
+            await connection.commit()
 
 
 repository = Repository()

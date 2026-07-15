@@ -31,3 +31,8 @@ class SourceView(BaseModel):
 class ColumnAnnotation(BaseModel):
     description: str = Field(default="", max_length=500)
     aliases: list[str] = Field(default_factory=list, max_length=20)
+
+
+class RunCreate(BaseModel):
+    question: str = Field(min_length=2, max_length=2000)
+    selected_table_ids: list[str] = Field(default_factory=list, max_length=12)

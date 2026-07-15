@@ -2,8 +2,9 @@ import asyncio
 from pathlib import Path
 from uuid import uuid4
 
-from app.agent.graph import AgentRuntime, run_agent
+from app.agent.graph import AgentRuntime
 from app.agent.provider import AnswerDraft, GroundedFinding
+from app.agent.runs import execute_run
 from app.analysis.chart import ChartService
 from app.analysis.service import AnalysisService
 from app.core.config import Settings
@@ -16,47 +17,40 @@ from app.query.sql_guard import SQLGuard
 from app.rag.service import RAGService
 
 
-class FakeProvider:
-    def __init__(self, table_id: str, physical_name: str, repair: bool = False):
+class RunProvider:
+    def __init__(self, table_id: str, physical_name: str):
         self.table_id = table_id
         self.physical_name = physical_name
-        self.repair = repair
-        self.plan_calls = 0
 
     async def plan(self, _question, _catalog, _retrieval, validation_error=None):
-        self.plan_calls += 1
-        if self.repair and validation_error is None:
-            return QueryPlan(task="query", table_ids=["outside"], sql="SELECT * FROM missing")
+        assert validation_error is None
         return QueryPlan(
             task="query",
             table_ids=[self.table_id],
-            sql=(
-                "SELECT region, SUM(sales_amount) AS total "
-                f'FROM "{self.physical_name}" GROUP BY region'
-            ),
+            sql=f'SELECT region, amount FROM "{self.physical_name}" ORDER BY amount DESC',
         )
 
     async def answer(self, _question, _plan, evidence):
-        row = next(item for item in evidence if "East" in item["fact"])
+        row = next(item for item in evidence if '"amount": 12' in item["fact"])
         return AnswerDraft(
-            summary="East is present in the result.",
-            findings=[GroundedFinding(text="East total is 120.0.", evidence_ids=[row["id"]])],
+            summary="North has the highest amount.",
+            findings=[GroundedFinding(text="The highest amount is 12.", evidence_ids=[row["id"]])],
         )
 
 
-def test_agent_runs_guarded_query_and_repairs_invalid_plan(tmp_path: Path) -> None:
+def test_run_persists_result_and_resumable_phase_events(tmp_path: Path) -> None:
     async def run() -> None:
         config = Settings(data_dir=tmp_path)
         repository = Repository(tmp_path / "metadata.sqlite3")
         storage = WorkspaceStorage(config)
         storage.ensure()
         await repository.initialize()
-        workspace = await repository.create_workspace("Agent")
+        workspace = await repository.create_workspace("Runs")
         source_id = str(uuid4())
         source_dir = storage.source_dir(workspace["id"], source_id)
         source_dir.mkdir(parents=True)
         csv_path = source_dir / "orders.csv"
-        csv_path.write_text("region,sales_amount\nEast,120\nWest,80\n", encoding="utf-8")
+        csv_path.write_text("region,amount\nNorth,12\nSouth,8\n", encoding="utf-8")
         await repository.add_source(
             workspace["id"], source_id, csv_path.name, csv_path.name, csv_path.stat().st_size
         )
@@ -64,20 +58,35 @@ def test_agent_runs_guarded_query_and_repairs_invalid_plan(tmp_path: Path) -> No
             workspace["id"], source_id, csv_path, csv_path.name
         )
         table = (await repository.catalog(workspace["id"]))[0]
-        provider = FakeProvider(table["id"], table["physical_name"], repair=True)
+        record = await repository.create_run(workspace["id"], "Highest amount", [])
         runtime = AgentRuntime(
             repository=repository,
             rag=RAGService(repository, config),
-            provider=provider,
+            provider=RunProvider(table["id"], table["physical_name"]),
             executor=DuckDBQueryExecutor(storage),
             guard=SQLGuard(),
             analysis=AnalysisService(),
             charts=ChartService(),
         )
 
-        result = await run_agent(runtime, workspace["id"], "Sales by region")
-        assert result["answer"].startswith("East is present")
-        assert result["query_result"].rows[0]["region"] in {"East", "West"}
-        assert provider.plan_calls == 2
+        await execute_run(repository, runtime, record["id"], workspace["id"], "Highest amount", [])
+
+        completed = await repository.get_run(workspace["id"], record["id"])
+        assert completed["status"] == "COMPLETED"
+        assert completed["payload"]["answer"].startswith("North")
+        events = await repository.list_events(record["id"])
+        assert [event["phase"] for event in events] == [
+            "retrieving",
+            "planning",
+            "validating",
+            "querying",
+            "analyzing",
+            "answering",
+            "completed",
+        ]
+        assert [event["sequence"] for event in await repository.list_events(record["id"], 5)] == [
+            6,
+            7,
+        ]
 
     asyncio.run(run())

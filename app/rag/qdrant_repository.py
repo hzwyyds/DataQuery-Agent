@@ -13,9 +13,7 @@ COLLECTION = "dataquery_catalog_v1"
 class QdrantCatalogRepository:
     def __init__(self, config: Settings = settings, client: AsyncQdrantClient | None = None):
         self.config = config
-        self.client = client or AsyncQdrantClient(
-            url=config.qdrant_url, check_compatibility=False
-        )
+        self.client = client or AsyncQdrantClient(url=config.qdrant_url, check_compatibility=False)
 
     async def ensure_collection(self) -> None:
         if await self.client.collection_exists(COLLECTION):
