@@ -1,0 +1,5 @@
+return_id,order_id,return_date,return_reason,refund_amount
+R001,O002,2026-01-20,Damaged,180.00
+R002,O005,2026-03-10,Not as described,450.00
+R003,O008,2026-04-29,Late delivery,210.00
+R004,O011,2026-06-18,Changed mind,270.00

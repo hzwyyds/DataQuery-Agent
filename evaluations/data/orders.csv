@@ -1,0 +1,13 @@
+order_id,order_date,customer_id,product_id,region,sales_amount,quantity,discount_rate,shipping_days,channel,returned
+O001,2026-01-05,C001,P001,East,240.00,2,0.00,2,Online,false
+O002,2026-01-12,C002,P002,West,180.00,1,0.10,5,Store,true
+O003,2026-02-03,C001,P003,East,320.00,4,0.05,3,Online,false
+O004,2026-02-18,C003,P001,North,120.00,1,0.00,7,Partner,false
+O005,2026-03-02,C004,P004,South,450.00,3,0.15,4,Online,true
+O006,2026-03-16,C005,P005,West,90.00,2,0.00,6,Store,false
+O007,2026-04-01,C006,P006,North,600.00,5,0.10,2,Partner,false
+O008,2026-04-21,C002,P003,South,210.00,2,0.05,8,Online,true
+O009,2026-05-09,C007,P002,East,360.00,2,0.00,3,Store,false
+O010,2026-05-25,C008,P004,West,150.00,1,0.20,9,Online,false
+O011,2026-06-11,C009,P005,South,270.00,3,0.00,4,Partner,true
+O012,2026-06-28,C010,P006,North,510.00,4,0.05,2,Online,false

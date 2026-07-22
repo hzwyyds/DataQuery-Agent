@@ -1,0 +1,7 @@
+product_id,product_name,category,unit_price,supplier_name,stock_quantity
+P001,Desk Lamp,Home,120.00,Northwind,48
+P002,Keyboard,Electronics,200.00,KeyWorks,75
+P003,Running Shoes,Sports,85.00,StrideLab,32
+P004,Coffee Maker,Home,180.00,BrewHouse,21
+P005,Backpack,Travel,45.00,TrailPack,64
+P006,Monitor,Electronics,150.00,ViewCore,18
