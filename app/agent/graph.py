@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import Any, Literal, TypedDict
 
 from langgraph.graph import END, START, StateGraph
+from pydantic import ValidationError
 
 from app.agent.grounding import (
     build_evidence,
@@ -89,9 +90,18 @@ def build_agent_graph(
         await emit("planning")
         if state.get("error"):
             return {}
-        query_plan = await runtime.provider.plan(
-            state["question"], selected_catalog(state), state["retrieval"]
-        )
+        try:
+            query_plan = await runtime.provider.plan(
+                state["question"], selected_catalog(state), state["retrieval"]
+            )
+        except (ValidationError, ValueError) as exc:
+            query_plan = await runtime.provider.plan(
+                state["question"],
+                selected_catalog(state),
+                state["retrieval"],
+                validation_error=f"The previous plan was invalid: {str(exc)[:500]}",
+            )
+            return {"plan": query_plan, "planning_attempts": 2}
         return {"plan": query_plan, "planning_attempts": 1}
 
     async def validate(state: AgentState) -> dict:
@@ -174,13 +184,28 @@ def build_agent_graph(
         await emit("answering")
         if state.get("answer") or state.get("error") or not state.get("evidence"):
             return {}
-        draft = await runtime.provider.answer(state["question"], state["plan"], state["evidence"])
+        try:
+            draft = await runtime.provider.answer(
+                state["question"], state["plan"], state["evidence"]
+            )
+        except (ValidationError, ValueError):
+            return {
+                "answer": fallback_answer(state["query_result"]),
+                "warnings": [
+                    "Answer model output was invalid; a deterministic evidence fallback was used."
+                ],
+            }
         answer = (
             render_answer(draft)
             if validate_answer(draft, state["evidence"])
             else fallback_answer(state["query_result"])
         )
-        return {"answer": answer}
+        warnings = (
+            []
+            if validate_answer(draft, state["evidence"])
+            else ["Answer evidence validation failed; a deterministic evidence fallback was used."]
+        )
+        return {"answer": answer, "warnings": warnings}
 
     def after_retrieve(state: AgentState) -> Literal["plan", "finish"]:
         return "finish" if state.get("error") else "plan"

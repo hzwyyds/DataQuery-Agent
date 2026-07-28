@@ -87,4 +87,12 @@ def render_answer(draft: AnswerDraft) -> str:
 
 def fallback_answer(result: QueryResult) -> str:
     suffix = " The preview was truncated." if result.scope.preview_truncated else ""
-    return f"The query returned {result.scope.rows_returned} preview rows.{suffix}"
+    rows = [
+        json.dumps(row, ensure_ascii=False, sort_keys=True, default=str)
+        for row in result.rows[:20]
+    ]
+    rendered_rows = "\n".join(f"- {row}" for row in rows)
+    return (
+        f"The query returned {result.scope.rows_returned} preview rows.{suffix}"
+        + (f"\nResults:\n{rendered_rows}" if rendered_rows else "")
+    )

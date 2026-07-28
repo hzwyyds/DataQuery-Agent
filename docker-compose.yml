@@ -1,0 +1,59 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    environment:
+      DATAQUERY_DATA_DIR: /var/lib/dataquery
+      RAG_ENABLED: "true"
+      RAG_REQUIRED: "false"
+      QDRANT_URL: http://qdrant:6333
+      EMBEDDING_URL: http://tei:80
+      EMBEDDING_SIZE: "512"
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_MODEL: ${LLM_MODEL:-deepseek-chat}
+      LLM_BASE_URL: ${LLM_BASE_URL:-https://api.deepseek.com}
+    volumes:
+      - dataquery-data:/var/lib/dataquery
+    ports:
+      - "127.0.0.1:8000:8000"
+    depends_on:
+      qdrant:
+        condition: service_started
+      tei:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+
+  web:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "127.0.0.1:5173:80"
+    depends_on:
+      api:
+        condition: service_healthy
+
+  qdrant:
+    image: qdrant/qdrant:v1.16.2
+    volumes:
+      - qdrant-storage:/qdrant/storage
+    ports:
+      - "127.0.0.1:6333:6333"
+
+  tei:
+    image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.8
+    command: ["--model-id", "BAAI/bge-small-zh-v1.5", "--port", "80"]
+    volumes:
+      - tei-model-cache:/data
+    ports:
+      - "127.0.0.1:8081:80"
+
+volumes:
+  dataquery-data:
+  qdrant-storage:
+  tei-model-cache:

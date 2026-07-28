@@ -21,6 +21,7 @@ class FakeProvider:
         self.table_id = table_id
         self.physical_name = physical_name
         self.repair = repair
+        self.malformed_answer = False
         self.plan_calls = 0
 
     async def plan(self, _question, _catalog, _retrieval, validation_error=None):
@@ -37,6 +38,8 @@ class FakeProvider:
         )
 
     async def answer(self, _question, _plan, evidence):
+        if self.malformed_answer:
+            raise ValueError("model response missed required answer fields")
         row = next(item for item in evidence if "East" in item["fact"])
         return AnswerDraft(
             summary="East is present in the result.",
@@ -79,5 +82,14 @@ def test_agent_runs_guarded_query_and_repairs_invalid_plan(tmp_path: Path) -> No
         assert result["answer"].startswith("East is present")
         assert result["query_result"].rows[0]["region"] in {"East", "West"}
         assert provider.plan_calls == 2
+
+        provider.malformed_answer = True
+        fallback = await run_agent(runtime, workspace["id"], "Sales by region")
+        assert fallback["answer"].startswith("The query returned 2 preview rows.")
+        assert '"region": "East"' in fallback["answer"]
+        assert '"total": 120' in fallback["answer"]
+        assert fallback["warnings"] == [
+            "Answer model output was invalid; a deterministic evidence fallback was used."
+        ]
 
     asyncio.run(run())
