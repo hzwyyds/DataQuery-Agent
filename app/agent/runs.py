@@ -12,12 +12,12 @@ from app.query.executor import QueryTimeout
 logger = logging.getLogger(__name__)
 
 PHASE_MESSAGES = {
-    "retrieving": "Retrieving relevant catalog entries",
-    "planning": "Planning a grounded query",
-    "validating": "Validating tables, columns, and SQL",
-    "querying": "Executing the guarded DuckDB query",
-    "analyzing": "Running constrained analysis and chart preparation",
-    "answering": "Synthesizing the evidence-backed answer",
+    "retrieving": "正在检索相关表和字段",
+    "planning": "正在生成受约束的查询与分析计划",
+    "validating": "正在校验表、字段和 SQL",
+    "querying": "正在执行受保护的 DuckDB 查询",
+    "analyzing": "正在使用 Pandas 计算受限分析",
+    "answering": "正在基于证据生成回答",
 }
 
 
@@ -61,33 +61,35 @@ async def execute_run(
             on_phase=record_phase,
         )
         if state.get("error"):
-            await repository.fail_run(run_id, "AGENT_ERROR", "The agent could not complete the run")
+            await repository.fail_run(
+                run_id, "AGENT_ERROR", "分析计划无法完成，请调整问题或字段范围"
+            )
             await repository.append_event(
                 run_id,
                 "failed",
-                "The run failed",
+                "运行失败",
                 {"error_code": "AGENT_ERROR"},
                 level="error",
             )
             return
         payload = result_payload(state)
         await repository.complete_run(run_id, payload)
-        await repository.append_event(run_id, "completed", "The run completed")
+        await repository.append_event(run_id, "completed", "运行完成")
     except QueryTimeout:
-        await repository.fail_run(run_id, "QUERY_TIMEOUT", "The query exceeded its time limit")
+        await repository.fail_run(run_id, "QUERY_TIMEOUT", "查询超过时间限制")
         await repository.append_event(
             run_id,
             "failed",
-            "The query exceeded its time limit",
+            "查询超过时间限制",
             {"error_code": "QUERY_TIMEOUT"},
             level="error",
         )
     except RuntimeError as exc:
         code = "CONFIGURATION_ERROR" if "LLM_API_KEY" in str(exc) else "PROVIDER_ERROR"
         message = (
-            "The language model is not configured"
+            "未配置语言模型"
             if code == "CONFIGURATION_ERROR"
-            else "The language model request failed"
+            else "语言模型请求失败"
         )
         logger.exception("Run %s failed", run_id)
         await repository.fail_run(run_id, code, message)
@@ -100,7 +102,7 @@ async def execute_run(
         await repository.append_event(
             run_id,
             "failed",
-            "The run failed unexpectedly",
+            "运行发生未预期错误",
             {"error_code": "RUN_FAILED"},
             level="error",
         )

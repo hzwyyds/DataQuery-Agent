@@ -1,6 +1,6 @@
 # DataQuery Agent
 
-DataQuery Agent is a local-first workbench for asking questions of CSV, XLSX, and Parquet data.
+DataQuery Agent is a local-first workbench for asking questions of CSV, TSV, XLS, XLSX, and Parquet data.
 It turns natural language into a guarded DuckDB query, optional constrained analysis, evidence-backed
 answers, and ECharts visualization.
 
@@ -39,8 +39,9 @@ Copy-Item .env.example .env
 docker compose up --build
 ```
 
-Open [http://127.0.0.1:5173](http://127.0.0.1:5173), create a workspace, upload the retail CSV
-files under `evaluations/data/`, and ask for sales by region or a monthly sales trend.
+Open [http://127.0.0.1:5173](http://127.0.0.1:5173), create a workspace, upload CSV/TSV/XLS/XLSX/Parquet
+files under `evaluations/data/`, and ask for sales by region or a monthly sales trend. A single
+file is limited to 50 MB and a workspace to 200 MB.
 
 | Service | Host address |
 | --- | --- |
@@ -87,6 +88,8 @@ ignored live-vector report under `artifacts/`. No upstream RAG metric is inherit
 - `sqlglot` accepts a single catalog-checked read-only query. DuckDB external access is disabled,
   and query/analysis/chart limits are enforced.
 - RAG failure is explicit: the API and workbench show lexical fallback or indexing failure.
+- Analysis requests are planned by the LLM as an allowlisted formula and intent, then computed by
+  Pandas for descriptive statistics, group aggregation, correlation, trend, or IQR outliers.
 - User data, `.env`, logs, caches, model files, and evaluation output are ignored by Git.
 
 ## Resume Description

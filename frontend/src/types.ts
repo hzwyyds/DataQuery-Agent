@@ -65,7 +65,15 @@ export type RunPayload = {
   columns?: string[];
   rows?: Record<string, unknown>[];
   retrieval?: { mode: string; matches: RetrievalMatch[] };
-  analysis?: { operation: string; metrics: Record<string, unknown> } | null;
+  analysis?: {
+    operation: string;
+    columns: string[];
+    formula: string;
+    intent: string;
+    input_rows: number;
+    rows: Record<string, unknown>[];
+    metrics: Record<string, unknown>;
+  } | null;
   evidence?: { id: string; fact: string }[];
   chart?: ChartResult | null;
   scope?: {

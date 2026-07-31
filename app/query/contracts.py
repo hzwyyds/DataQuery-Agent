@@ -22,6 +22,9 @@ class QueryResult(BaseModel):
 class AnalysisResult(BaseModel):
     operation: str
     columns: list[str]
+    formula: str = ""
+    intent: str = ""
+    input_rows: int = 0
     rows: list[dict[str, Any]] = Field(default_factory=list)
     metrics: dict[str, Any] = Field(default_factory=dict)
 
@@ -42,6 +45,8 @@ class AnalysisSpec(BaseModel):
     columns: list[str] = Field(default_factory=list, max_length=12)
     group_by: list[str] = Field(default_factory=list, max_length=4)
     aggregation: Literal["sum", "mean", "min", "max", "count", "median"] = "mean"
+    formula: str = Field(default="", max_length=500)
+    intent: str = Field(default="", max_length=300)
 
 
 class ChartSpec(BaseModel):

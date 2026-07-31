@@ -100,7 +100,7 @@ async def upload_file(workspace_id: str, file: UploadFile = File(...)):
     suffix = Path(original_name).suffix.lower()
     if suffix not in SUPPORTED_SUFFIXES:
         raise HTTPException(
-            status_code=415, detail="supported file types are CSV, XLSX, and Parquet"
+            status_code=415, detail="仅支持 CSV、TSV、XLS、XLSX 和 Parquet 文件"
         )
     source_id = str(uuid4())
     stored_name = safe_filename(original_name)
@@ -113,10 +113,10 @@ async def upload_file(workspace_id: str, file: UploadFile = File(...)):
             while chunk := await file.read(1024 * 1024):
                 size += len(chunk)
                 if size > settings.max_file_bytes:
-                    raise HTTPException(status_code=413, detail="file exceeds the 50 MB limit")
+                    raise HTTPException(status_code=413, detail="单个文件不能超过 50 MB")
                 stream.write(chunk)
         if storage.workspace_bytes(workspace_id) > settings.max_workspace_bytes:
-            raise HTTPException(status_code=413, detail="workspace exceeds the 200 MB limit")
+            raise HTTPException(status_code=413, detail="工作区总文件不能超过 200 MB")
         await repository.add_source(workspace_id, source_id, original_name, stored_name, size)
         await ingestion.ingest(workspace_id, source_id, target, original_name)
         await rag.index_source(workspace_id, source_id)

@@ -190,7 +190,7 @@ def build_agent_graph(
             )
         except (ValidationError, ValueError):
             return {
-                "answer": fallback_answer(state["query_result"]),
+                "answer": fallback_answer(state["query_result"], state.get("analysis_result")),
                 "warnings": [
                     "Answer model output was invalid; a deterministic evidence fallback was used."
                 ],
@@ -198,7 +198,7 @@ def build_agent_graph(
         answer = (
             render_answer(draft)
             if validate_answer(draft, state["evidence"])
-            else fallback_answer(state["query_result"])
+            else fallback_answer(state["query_result"], state.get("analysis_result"))
         )
         warnings = (
             []

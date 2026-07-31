@@ -12,7 +12,7 @@ import pandas as pd
 from app.data.repository import Repository
 from app.data.storage import WorkspaceStorage
 
-SUPPORTED_SUFFIXES = {".csv", ".xlsx", ".parquet"}
+SUPPORTED_SUFFIXES = {".csv", ".tsv", ".xls", ".xlsx", ".parquet"}
 _IDENTIFIER = re.compile(r"[^A-Za-z0-9_]+")
 
 
@@ -54,14 +54,14 @@ class IngestionService:
     ) -> list[dict]:
         suffix = path.suffix.lower()
         if suffix not in SUPPORTED_SUFFIXES:
-            raise ValueError("supported file types are CSV, XLSX, and Parquet")
+            raise ValueError("仅支持 CSV、TSV、XLS、XLSX 和 Parquet 文件")
         warehouse = self.storage.warehouse_path(workspace_id)
         warehouse.parent.mkdir(parents=True, exist_ok=True)
         connection = duckdb.connect(str(warehouse))
         created: list[str] = []
         result: list[dict] = []
         try:
-            if suffix == ".xlsx":
+            if suffix in {".xls", ".xlsx"}:
                 workbook = pd.ExcelFile(path)
                 entries = [
                     (sheet, pd.read_excel(path, sheet_name=sheet)) for sheet in workbook.sheet_names
@@ -88,8 +88,12 @@ class IngestionService:
                     )
             else:
                 physical = f"t_{source_id.replace('-', '')[:12]}_{slug(Path(original_name).stem)}"
-                reader = "read_csv_auto" if suffix == ".csv" else "read_parquet"
-                options = ", header = true" if suffix == ".csv" else ""
+                reader = "read_csv_auto" if suffix in {".csv", ".tsv"} else "read_parquet"
+                options = ", header = true"
+                if suffix == ".tsv":
+                    options += ", delim = '\\t'"
+                if suffix == ".parquet":
+                    options = ""
                 escaped = str(path.resolve()).replace("'", "''")
                 connection.execute(
                     f"CREATE OR REPLACE TABLE {quote(physical)} AS "

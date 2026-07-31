@@ -55,8 +55,8 @@ export function ChartView({ chart }: { chart: ChartResult }) {
     <div className="chart-wrap">
       <ReactEChartsCore echarts={echarts} option={option} style={{ height: 320 }} notMerge />
       <p className="chart-scope">
-        Displaying {chart.displayed_points.toLocaleString()} of {chart.source_points.toLocaleString()}
-        {chart.downsampled ? " points (downsampled)" : " points"}
+        展示 {chart.displayed_points.toLocaleString()} / {chart.source_points.toLocaleString()} 个点
+        {chart.downsampled ? "（已下采样）" : ""}
       </p>
     </div>
   );

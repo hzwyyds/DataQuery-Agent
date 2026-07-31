@@ -73,7 +73,7 @@ def test_run_persists_result_and_resumable_phase_events(tmp_path: Path) -> None:
 
         completed = await repository.get_run(workspace["id"], record["id"])
         assert completed["status"] == "COMPLETED"
-        assert completed["payload"]["answer"].startswith("North")
+        assert "North has the highest amount." in completed["payload"]["answer"]
         events = await repository.list_events(record["id"])
         assert [event["phase"] for event in events] == [
             "retrieving",

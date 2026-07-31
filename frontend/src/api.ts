@@ -12,13 +12,14 @@ export const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "";
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, init);
   if (!response.ok) {
-    let message = `Request failed (${response.status})`;
+    let message = `请求失败（${response.status}）`;
     try {
       const body = (await response.json()) as { detail?: string };
       message = body.detail ?? message;
     } catch {
       // Keep the stable HTTP fallback when the response is not JSON.
     }
+    if (response.status === 413) message = "文件超过 50 MB 限制，或工作区超过 200 MB 限制";
     throw new Error(message);
   }
   if (response.status === 204) return undefined as T;

@@ -39,6 +39,26 @@ class AnalysisService:
             raise AnalysisError(f"column is not numeric: {column}")
         return values
 
+    @staticmethod
+    def default_formula(spec: AnalysisSpec) -> str:
+        columns = ", ".join(spec.columns) or "数值字段"
+        if spec.operation == "describe":
+            return f"对 {columns} 计算 count、mean、median、min、max、std"
+        if spec.operation == "group_aggregate":
+            return f"按 {', '.join(spec.group_by)} 分组，对 {columns} 计算 {spec.aggregation}"
+        if spec.operation == "correlation":
+            return f"Pearson r({spec.columns[0]}, {spec.columns[1]})"
+        if spec.operation == "trend":
+            return f"按时间排序，变化量 = last({spec.columns[1]}) - first({spec.columns[1]})"
+        return f"IQR = Q3({columns}) - Q1({columns})；异常值在 [Q1 - 1.5IQR, Q3 + 1.5IQR] 外"
+
+    def result_metadata(self, spec: AnalysisSpec, frame: pd.DataFrame) -> dict[str, Any]:
+        return {
+            "formula": spec.formula.strip() or self.default_formula(spec),
+            "intent": spec.intent.strip(),
+            "input_rows": int(len(frame)),
+        }
+
     def _describe(self, frame: pd.DataFrame, spec: AnalysisSpec) -> AnalysisResult:
         columns = spec.columns or [
             column
@@ -64,6 +84,7 @@ class AnalysisService:
         return AnalysisResult(
             operation=spec.operation,
             columns=["column", "count", "mean", "median", "min", "max", "std"],
+            **self.result_metadata(spec, frame),
             rows=rows,
         )
 
@@ -82,6 +103,7 @@ class AnalysisService:
         return AnalysisResult(
             operation=spec.operation,
             columns=[str(column) for column in output.columns],
+            **self.result_metadata(spec, frame),
             rows=records(output),
             metrics={"groups": int(len(output)), "aggregation": spec.aggregation},
         )
@@ -97,6 +119,7 @@ class AnalysisService:
         return AnalysisResult(
             operation=spec.operation,
             columns=spec.columns,
+            **self.result_metadata(spec, frame),
             rows=records(paired),
             metrics={
                 "correlation": float(paired.corr().iloc[0, 1]),
@@ -128,6 +151,7 @@ class AnalysisService:
         return AnalysisResult(
             operation=spec.operation,
             columns=[time_column, value_column],
+            **self.result_metadata(spec, frame),
             rows=records(working),
             metrics={"first": first, "last": last, "change": change, "direction": direction},
         )
@@ -144,6 +168,7 @@ class AnalysisService:
         return AnalysisResult(
             operation=spec.operation,
             columns=[str(name) for name in outliers.columns],
+            **self.result_metadata(spec, frame),
             rows=records(outliers),
             metrics={
                 "q1": q1,

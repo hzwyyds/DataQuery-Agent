@@ -3,9 +3,10 @@ from pathlib import Path
 from uuid import uuid4
 
 import pandas as pd
+import xlwt
 
 from app.core.config import Settings
-from app.data.ingestion import IngestionService
+from app.data.ingestion import SUPPORTED_SUFFIXES, IngestionService
 from app.data.repository import Repository
 from app.data.storage import WorkspaceStorage
 
@@ -31,8 +32,23 @@ def ingest_fixture(tmp_path: Path, suffix: str) -> list[dict]:
         )
         if suffix == ".csv":
             frame.to_csv(path, index=False)
+        elif suffix == ".tsv":
+            frame.to_csv(path, index=False, sep="\t")
         elif suffix == ".parquet":
             frame.to_parquet(path, index=False)
+        elif suffix == ".xls":
+            workbook = xlwt.Workbook()
+            orders = workbook.add_sheet("Orders")
+            for column, name in enumerate(frame.columns):
+                orders.write(0, column, name)
+            for row, values in enumerate(frame.fillna("").itertuples(index=False), 1):
+                for column, value in enumerate(values):
+                    orders.write(row, column, value)
+            regions = workbook.add_sheet("Regions")
+            regions.write(0, 0, "region")
+            for row, value in enumerate(frame["region"], 1):
+                regions.write(row, 0, value)
+            workbook.save(str(path))
         else:
             with pd.ExcelWriter(path) as writer:
                 frame.to_excel(writer, sheet_name="Orders", index=False)
@@ -69,8 +85,28 @@ def test_parquet_ingestion(tmp_path: Path) -> None:
     }
 
 
+def test_tsv_ingestion(tmp_path: Path) -> None:
+    catalog = ingest_fixture(tmp_path, ".tsv")
+
+    assert catalog[0]["row_count"] == 3
+    assert {column["name"] for column in catalog[0]["columns"]} >= {"region", "sales_amount"}
+
+
+def test_excel_extensions_include_xls_and_xlsx() -> None:
+    assert {".xls", ".xlsx"} <= SUPPORTED_SUFFIXES
+
+
 def test_excel_ingestion_creates_one_table_per_nonempty_sheet(tmp_path: Path) -> None:
     catalog = ingest_fixture(tmp_path, ".xlsx")
+
+    assert {table["display_name"] for table in catalog} == {
+        "orders / Orders",
+        "orders / Regions",
+    }
+
+
+def test_xls_ingestion_creates_one_table_per_nonempty_sheet(tmp_path: Path) -> None:
+    catalog = ingest_fixture(tmp_path, ".xls")
 
     assert {table["display_name"] for table in catalog} == {
         "orders / Orders",

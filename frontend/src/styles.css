@@ -170,7 +170,30 @@ button:disabled { cursor: not-allowed; opacity: .48; }
 .result-placeholder, .run-error { display: grid; min-height: 260px; place-content: center; justify-items: center; gap: 9px; color: #8a938e; font-size: 12px; }
 .run-error { color: #a33f35; }
 .answer-view { min-height: 260px; padding: 20px; }
-.answer-text { max-width: 780px; color: #26302a; font-size: 14px; line-height: 1.75; white-space: pre-wrap; }
+.answer-text { max-width: 780px; color: #26302a; font-size: 14px; line-height: 1.75; }
+.markdown-body > :first-child { margin-top: 0; }
+.markdown-body > :last-child { margin-bottom: 0; }
+.markdown-body h2 { margin: 18px 0 8px; color: #1f624f; font-size: 16px; line-height: 1.4; }
+.markdown-body h3 { margin: 14px 0 6px; color: #39594b; font-size: 13px; line-height: 1.4; }
+.markdown-body p { margin: 8px 0; }
+.markdown-body ul, .markdown-body ol { margin: 8px 0; padding-left: 22px; }
+.markdown-body li + li { margin-top: 4px; }
+.markdown-body code { padding: 2px 4px; border-radius: 3px; color: #285b4a; background: #eef5f0; font: 0.92em "Cascadia Code", Consolas, monospace; }
+.markdown-body pre { margin: 10px 0; padding: 10px 12px; overflow-x: auto; border-radius: 4px; color: #d8e8df; background: #1e2924; }
+.markdown-body pre code { padding: 0; color: inherit; background: transparent; }
+.markdown-body blockquote { margin: 10px 0; padding: 4px 12px; color: #59675f; border-left: 3px solid #b8cdbf; }
+.markdown-body table { display: block; max-width: 100%; overflow-x: auto; }
+.markdown-body th, .markdown-body td { white-space: nowrap; }
+.markdown-body .katex-display { margin: 14px 0; overflow-x: auto; overflow-y: hidden; padding: 4px 0; }
+.analysis-view { display: grid; gap: 14px; min-height: 260px; padding: 18px; }
+.analysis-summary { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1px; background: #dfe4e0; }
+.analysis-summary > div { display: grid; gap: 4px; padding: 11px 12px; background: #f7f9f7; }
+.analysis-summary small, .analysis-detail small { color: #77817b; font-size: 10px; font-weight: 700; }
+.analysis-summary strong { color: #26302a; font-size: 14px; }
+.analysis-detail { padding: 10px 12px; border-left: 3px solid #5d8e79; background: #f4f8f5; }
+.analysis-detail .markdown-body { margin-top: 5px; color: #38443d; font: 12px/1.6 "Noto Sans SC", "Microsoft YaHei", sans-serif; }
+.analysis-detail .markdown-body p { margin: 0; }
+.analysis-detail .markdown-body code { color: #285b4a; }
 .warning-row { gap: 7px; margin-top: 12px; padding: 8px 10px; color: #83521e; border-left: 3px solid #d49443; background: #fff8ec; font-size: 11px; }
 .metrics-row { display: flex; flex-wrap: wrap; gap: 1px; margin-top: 16px; background: #dfe4e0; }
 .metrics-row > span { display: grid; min-width: 112px; flex: 1; gap: 3px; padding: 10px 12px; background: #f7f9f7; }

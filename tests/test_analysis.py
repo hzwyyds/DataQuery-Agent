@@ -25,9 +25,18 @@ def test_correlation_requires_two_explicit_columns() -> None:
         service.run(AnalysisSpec(operation="correlation", columns=["sales"]), result)
 
     analysis = service.run(
-        AnalysisSpec(operation="correlation", columns=["sales", "returns"]), result
+        AnalysisSpec(
+            operation="correlation",
+            columns=["sales", "returns"],
+            formula="Pearson r(sales, returns)",
+            intent="衡量销售额与退货量的线性关系",
+        ),
+        result,
     )
     assert analysis.metrics == {"correlation": pytest.approx(1.0), "pairs": 2}
+    assert analysis.formula == "Pearson r(sales, returns)"
+    assert analysis.intent == "衡量销售额与退货量的线性关系"
+    assert analysis.input_rows == 2
 
 
 def test_outlier_iqr_returns_only_outlying_rows() -> None:

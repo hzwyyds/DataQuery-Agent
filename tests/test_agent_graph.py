@@ -2,6 +2,8 @@ import asyncio
 from pathlib import Path
 from uuid import uuid4
 
+import pytest
+
 from app.agent.graph import AgentRuntime, run_agent
 from app.agent.provider import AnswerDraft, GroundedFinding
 from app.analysis.chart import ChartService
@@ -10,17 +12,20 @@ from app.core.config import Settings
 from app.data.ingestion import IngestionService
 from app.data.repository import Repository
 from app.data.storage import WorkspaceStorage
-from app.query.contracts import QueryPlan
+from app.query.contracts import AnalysisSpec, QueryPlan
 from app.query.executor import DuckDBQueryExecutor
 from app.query.sql_guard import SQLGuard
 from app.rag.service import RAGService
 
 
 class FakeProvider:
-    def __init__(self, table_id: str, physical_name: str, repair: bool = False):
+    def __init__(
+        self, table_id: str, physical_name: str, repair: bool = False, analysis: bool = False
+    ):
         self.table_id = table_id
         self.physical_name = physical_name
         self.repair = repair
+        self.analysis = analysis
         self.malformed_answer = False
         self.plan_calls = 0
 
@@ -28,6 +33,18 @@ class FakeProvider:
         self.plan_calls += 1
         if self.repair and validation_error is None:
             return QueryPlan(task="query", table_ids=["outside"], sql="SELECT * FROM missing")
+        if self.analysis:
+            return QueryPlan(
+                task="analysis",
+                table_ids=[self.table_id],
+                sql=f'SELECT sales_amount, discount_rate FROM "{self.physical_name}"',
+                analysis=AnalysisSpec(
+                    operation="correlation",
+                    columns=["sales_amount", "discount_rate"],
+                    formula="Pearson r(sales_amount, discount_rate)",
+                    intent="衡量销售额与折扣率的线性关系",
+                ),
+            )
         return QueryPlan(
             task="query",
             table_ids=[self.table_id],
@@ -40,6 +57,8 @@ class FakeProvider:
     async def answer(self, _question, _plan, evidence):
         if self.malformed_answer:
             raise ValueError("model response missed required answer fields")
+        if self.analysis:
+            return AnswerDraft(summary="相关性分析已完成。")
         row = next(item for item in evidence if "East" in item["fact"])
         return AnswerDraft(
             summary="East is present in the result.",
@@ -79,17 +98,59 @@ def test_agent_runs_guarded_query_and_repairs_invalid_plan(tmp_path: Path) -> No
         )
 
         result = await run_agent(runtime, workspace["id"], "Sales by region")
-        assert result["answer"].startswith("East is present")
+        assert "East is present in the result." in result["answer"]
         assert result["query_result"].rows[0]["region"] in {"East", "West"}
         assert provider.plan_calls == 2
 
         provider.malformed_answer = True
         fallback = await run_agent(runtime, workspace["id"], "Sales by region")
-        assert fallback["answer"].startswith("The query returned 2 preview rows.")
+        assert fallback["answer"].startswith("查询返回 2 行预览结果。")
         assert '"region": "East"' in fallback["answer"]
         assert '"total": 120' in fallback["answer"]
         assert fallback["warnings"] == [
             "Answer model output was invalid; a deterministic evidence fallback was used."
         ]
+
+    asyncio.run(run())
+
+
+def test_agent_runs_structured_pandas_analysis(tmp_path: Path) -> None:
+    async def run() -> None:
+        config = Settings(data_dir=tmp_path)
+        repository = Repository(tmp_path / "metadata.sqlite3")
+        storage = WorkspaceStorage(config)
+        storage.ensure()
+        await repository.initialize()
+        workspace = await repository.create_workspace("Analysis")
+        source_id = str(uuid4())
+        source_dir = storage.source_dir(workspace["id"], source_id)
+        source_dir.mkdir(parents=True)
+        csv_path = source_dir / "orders.csv"
+        csv_path.write_text(
+            "sales_amount,discount_rate\n100,0.1\n200,0.2\n300,0.3\n", encoding="utf-8"
+        )
+        await repository.add_source(
+            workspace["id"], source_id, csv_path.name, csv_path.name, csv_path.stat().st_size
+        )
+        await IngestionService(repository, storage).ingest(
+            workspace["id"], source_id, csv_path, csv_path.name
+        )
+        table = (await repository.catalog(workspace["id"]))[0]
+        runtime = AgentRuntime(
+            repository=repository,
+            rag=RAGService(repository, config),
+            provider=FakeProvider(table["id"], table["physical_name"], analysis=True),
+            executor=DuckDBQueryExecutor(storage),
+            guard=SQLGuard(),
+            analysis=AnalysisService(),
+            charts=ChartService(),
+        )
+
+        result = await run_agent(runtime, workspace["id"], "分析销售额与折扣率的相关性")
+
+        assert result["analysis_result"].formula == "Pearson r(sales_amount, discount_rate)"
+        assert result["analysis_result"].intent == "衡量销售额与折扣率的线性关系"
+        assert result["analysis_result"].metrics["correlation"] == pytest.approx(1.0)
+        assert result["analysis_result"].input_rows == 3
 
     asyncio.run(run())

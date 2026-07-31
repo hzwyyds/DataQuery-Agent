@@ -1,3 +1,4 @@
+from dataclasses import replace
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -77,6 +78,14 @@ def test_workspace_upload_catalog_and_delete(tmp_path: Path, monkeypatch) -> Non
         )
         assert annotation.status_code == 200
         assert annotation.json()["aliases"] == ["market"]
+
+        monkeypatch.setattr(routes, "settings", replace(routes.settings, max_file_bytes=8))
+        too_large = client.post(
+            f"/api/v1/workspaces/{workspace_id}/files",
+            files={"file": ("too-large.csv", b"region\nEast\n", "text/csv")},
+        )
+        assert too_large.status_code == 413
+        assert too_large.json()["detail"] == "单个文件不能超过 50 MB"
 
         deleted = client.delete(f"/api/v1/workspaces/{workspace_id}/sources/{source_id}")
         assert deleted.status_code == 204

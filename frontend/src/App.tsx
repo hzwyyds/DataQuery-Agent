@@ -20,12 +20,14 @@ import {
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 
 import { API_BASE, api } from "./api";
+import { MarkdownText } from "./MarkdownText";
 import type {
   CatalogColumn,
   CatalogTable,
   RagStatus,
   Run,
   RunEvent,
+  RunPayload,
   Source,
   Workspace,
 } from "./types";
@@ -43,17 +45,81 @@ const phases = [
   "failed",
 ];
 
+const MAX_FILE_BYTES = 50 * 1024 * 1024;
+
+const TAB_LABELS = { answer: "回答", analysis: "分析", data: "数据", sql: "SQL" };
+const STATUS_LABELS: Record<string, string> = {
+  RUNNING: "运行中",
+  COMPLETED: "已完成",
+  FAILED: "失败",
+};
+const PHASE_LABELS: Record<string, string> = {
+  retrieving: "检索目录",
+  planning: "生成计划",
+  validating: "校验 SQL",
+  querying: "执行查询",
+  analyzing: "Pandas 分析",
+  answering: "生成回答",
+  completed: "完成",
+  failed: "失败",
+};
+const ANALYSIS_LABELS: Record<string, string> = {
+  describe: "描述统计",
+  group_aggregate: "分组聚合",
+  correlation: "相关性分析",
+  trend: "趋势分析",
+  outlier_iqr: "IQR 异常值检测",
+};
+const METRIC_LABELS: Record<string, string> = {
+  aggregation: "聚合方式",
+  change: "变化量",
+  correlation: "相关系数",
+  direction: "趋势方向",
+  first: "起始值",
+  groups: "分组数",
+  iqr: "四分位距",
+  last: "结束值",
+  lower_bound: "下界",
+  outlier_count: "异常值数",
+  pairs: "有效样本对",
+  q1: "Q1",
+  q3: "Q3",
+  upper_bound: "上界",
+};
+
+const RETRIEVAL_MODE_LABELS: Record<string, string> = {
+  HYBRID: "混合检索（词法 + 向量）",
+  LEXICAL_FALLBACK: "词法检索降级",
+  LEXICAL: "词法检索",
+  VECTOR: "向量检索",
+  NONE: "未执行检索",
+};
+
+function retrievalModeLabel(mode?: string) {
+  if (!mode) return "等待中";
+  return RETRIEVAL_MODE_LABELS[mode] ?? mode;
+}
+
 function formatBytes(bytes: number) {
   return bytes < 1024 * 1024 ? `${Math.ceil(bytes / 1024)} KB` : `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 
 function formatTime(value: string) {
-  return new Intl.DateTimeFormat(undefined, {
+  return new Intl.DateTimeFormat("zh-CN", {
     month: "short",
     day: "numeric",
     hour: "2-digit",
     minute: "2-digit",
   }).format(new Date(value));
+}
+
+function formatIndexStatus(status: string) {
+  return ({
+    FAILED: "索引失败",
+    INDEXING: "正在索引",
+    PENDING: "等待索引",
+    READY: "索引完成",
+  } as Record<string, string>)[status] ?? status;
 }
 
 function StatusDot({ status }: { status: string }) {
@@ -77,17 +143,17 @@ function ColumnEditor({
     <div className="annotation-editor">
       <div className="editor-heading">
         <strong>{column.name}</strong>
-        <button className="icon-button" onClick={onClose} title="Close editor" aria-label="Close editor">
+        <button className="icon-button" onClick={onClose} title="关闭编辑" aria-label="关闭编辑">
           <X size={15} />
         </button>
       </div>
       <label>
-        Description
+        字段说明
         <textarea value={description} onChange={(event) => setDescription(event.target.value)} rows={3} />
       </label>
       <label>
-        Aliases
-        <input value={aliases} onChange={(event) => setAliases(event.target.value)} placeholder="revenue, turnover" />
+        同义词
+        <input value={aliases} onChange={(event) => setAliases(event.target.value)} placeholder="营收，营业额" />
       </label>
       <button
         className="compact-button primary"
@@ -104,14 +170,14 @@ function ColumnEditor({
           }
         }}
       >
-        {saving ? <LoaderCircle className="spin" size={14} /> : <Check size={14} />} Save
+        {saving ? <LoaderCircle className="spin" size={14} /> : <Check size={14} />} 保存
       </button>
     </div>
   );
 }
 
 function DataTable({ columns, rows }: { columns: string[]; rows: Record<string, unknown>[] }) {
-  if (!rows.length) return <div className="empty-result">No rows returned.</div>;
+  if (!rows.length) return <div className="empty-result">没有可展示的结果行。</div>;
   return (
     <div className="table-scroll">
       <table>
@@ -130,6 +196,25 @@ function DataTable({ columns, rows }: { columns: string[]; rows: Record<string, 
   );
 }
 
+function AnalysisView({ analysis }: { analysis: NonNullable<RunPayload["analysis"]> }) {
+  return (
+    <div className="analysis-view">
+      <div className="analysis-summary">
+        <div><small>分析方法</small><strong>{ANALYSIS_LABELS[analysis.operation] ?? analysis.operation}</strong></div>
+        <div><small>输入行数</small><strong>{analysis.input_rows.toLocaleString()}</strong></div>
+      </div>
+      <div className="analysis-detail"><small>LLM 分析意图</small><MarkdownText>{analysis.intent || "根据问题选择受限分析算子，并由 Pandas 计算。"}</MarkdownText></div>
+      <div className="analysis-detail"><small>计算公式</small><MarkdownText>{analysis.formula || "由 Pandas 按受限算子计算"}</MarkdownText></div>
+      <div className="metrics-row">
+        {Object.entries(analysis.metrics).map(([key, value]) => (
+          <span key={key}><small>{METRIC_LABELS[key] ?? key}</small><strong>{String(value)}</strong></span>
+        ))}
+      </div>
+      <DataTable columns={analysis.columns} rows={analysis.rows} />
+    </div>
+  );
+}
+
 export function App() {
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [workspaceId, setWorkspaceId] = useState("");
@@ -144,7 +229,7 @@ export function App() {
   const [editingColumn, setEditingColumn] = useState<string | null>(null);
   const [activeRun, setActiveRun] = useState<Run | null>(null);
   const [events, setEvents] = useState<RunEvent[]>([]);
-  const [tab, setTab] = useState<"answer" | "data" | "sql">("answer");
+  const [tab, setTab] = useState<"answer" | "analysis" | "data" | "sql">("answer");
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
   const fileInput = useRef<HTMLInputElement>(null);
@@ -228,6 +313,11 @@ export function App() {
 
   async function upload(file?: File) {
     if (!file || !workspaceId) return;
+    if (file.size > MAX_FILE_BYTES) {
+      setError("单个文件最大为 50 MB，请压缩、拆分或筛选数据后再上传。");
+      if (fileInput.current) fileInput.current.value = "";
+      return;
+    }
     setBusy("upload");
     setError("");
     try {
@@ -262,16 +352,16 @@ export function App() {
       <header className="topbar">
         <div className="brand-lockup">
           <span className="brand-mark"><Database size={18} /></span>
-          <div><strong>DataQuery Agent</strong><span>Local analysis workbench</span></div>
+          <div><strong>DataQuery Agent</strong><span>本地数据分析台</span></div>
         </div>
         <div className="service-state">
           <StatusDot status={ragStatus?.ready ? "ready" : ragStatus?.enabled ? "degraded" : "disabled"} />
-          <span>{ragStatus?.ready ? "Semantic retrieval ready" : ragStatus?.enabled ? "Lexical fallback" : "RAG disabled"}</span>
+          <span>{ragStatus?.ready ? "语义检索已就绪" : ragStatus?.enabled ? "已降级为词法检索" : "RAG 未启用"}</span>
           {workspaceId && (
             <button
               className="icon-button"
-              title="Reindex catalog"
-              aria-label="Reindex catalog"
+              title="重新建立目录索引"
+              aria-label="重新建立目录索引"
               disabled={busy === "reindex"}
               onClick={async () => {
                 setBusy("reindex");
@@ -292,8 +382,8 @@ export function App() {
       </header>
 
       <aside className="workspace-rail">
-        <div className="rail-heading"><span>Workspaces</span><span>{workspaces.length}</span></div>
-        <nav className="workspace-list" aria-label="Workspaces">
+        <div className="rail-heading"><span>工作区</span><span>{workspaces.length}</span></div>
+        <nav className="workspace-list" aria-label="工作区">
           {workspaces.map((item) => (
             <button
               key={item.id}
@@ -301,7 +391,7 @@ export function App() {
               onClick={() => setWorkspaceId(item.id)}
             >
               <Database size={15} />
-              <span><strong>{item.name}</strong><small>{item.table_count} tables</small></span>
+              <span><strong>{item.name}</strong><small>{item.table_count} 张表</small></span>
             </button>
           ))}
         </nav>
@@ -310,15 +400,15 @@ export function App() {
             value={newWorkspace}
             onChange={(event) => setNewWorkspace(event.target.value)}
             onKeyDown={(event) => event.key === "Enter" && createWorkspace()}
-            placeholder="New workspace"
-            aria-label="New workspace name"
+            placeholder="新建工作区"
+            aria-label="新建工作区名称"
           />
-          <button className="icon-button" onClick={createWorkspace} title="Create workspace" aria-label="Create workspace">
+          <button className="icon-button" onClick={createWorkspace} title="创建工作区" aria-label="创建工作区">
             {busy === "workspace" ? <LoaderCircle className="spin" size={16} /> : <CirclePlus size={16} />}
           </button>
         </div>
         <div className="history-block">
-          <div className="rail-heading"><span>Recent runs</span></div>
+          <div className="rail-heading"><span>最近运行</span></div>
           {runs.slice(0, 8).map((run) => (
             <button
               key={run.id}
@@ -336,29 +426,29 @@ export function App() {
         {!workspace ? (
           <section className="first-workspace">
             <Database size={28} />
-            <h1>Create a workspace</h1>
-            <p>Start with a name, then upload a CSV, XLSX, or Parquet file.</p>
+            <h1>创建工作区</h1>
+            <p>输入工作区名称，然后上传 CSV、TSV、XLS、XLSX 或 Parquet 数据文件。</p>
           </section>
         ) : (
           <>
             <header className="workspace-header">
-              <div><p>Workspace</p><h1>{workspace.name}</h1></div>
-              <div className="workspace-meta"><span>{sources.length} sources</span><span>{catalog.length} tables</span></div>
+              <div><p>工作区</p><h1>{workspace.name}</h1></div>
+              <div className="workspace-meta"><span>{sources.length} 个文件</span><span>{catalog.length} 张表</span></div>
             </header>
 
             {error && (
               <div className="error-banner" role="alert">
                 <AlertTriangle size={16} /><span>{error}</span>
-                <button className="icon-button" onClick={() => setError("")} title="Dismiss" aria-label="Dismiss"><X size={15} /></button>
+                <button className="icon-button" onClick={() => setError("")} title="关闭提示" aria-label="关闭提示"><X size={15} /></button>
               </div>
             )}
 
             <div className="workspace-grid">
-              <section className="catalog-pane" aria-label="Data catalog">
+              <section className="catalog-pane" aria-label="数据目录">
                 <div className="pane-heading">
-                  <div><p>Data catalog</p><span>{catalog.length} tables</span></div>
-                  <input ref={fileInput} type="file" accept=".csv,.xlsx,.parquet" hidden onChange={(event) => upload(event.target.files?.[0])} />
-                  <button className="icon-button emphasized" onClick={() => fileInput.current?.click()} title="Upload dataset" aria-label="Upload dataset">
+                  <div><p>数据目录</p><span>{catalog.length} 张表 · 单文件最大 50 MB</span></div>
+                  <input ref={fileInput} type="file" accept=".csv,.tsv,.xls,.xlsx,.parquet" hidden onChange={(event) => upload(event.target.files?.[0])} />
+                  <button className="icon-button emphasized" onClick={() => fileInput.current?.click()} title="上传数据文件" aria-label="上传数据文件">
                     {busy === "upload" ? <LoaderCircle className="spin" size={16} /> : <Upload size={16} />}
                   </button>
                 </div>
@@ -366,13 +456,13 @@ export function App() {
                   {sources.map((source) => (
                     <div className="source-row" key={source.id}>
                       <FileSpreadsheet size={14} />
-                      <span><strong>{source.original_name}</strong><small>{formatBytes(source.size_bytes)} · {source.index_status}</small></span>
+                      <span><strong>{source.original_name}</strong><small>{formatBytes(source.size_bytes)} · {formatIndexStatus(source.index_status)}</small></span>
                       <button
                         className="icon-button danger"
-                        title="Delete source"
-                        aria-label={`Delete ${source.original_name}`}
+                        title="删除数据文件"
+                        aria-label={`删除 ${source.original_name}`}
                         onClick={async () => {
-                          if (!confirm(`Delete ${source.original_name}?`)) return;
+                          if (!confirm(`确认删除 ${source.original_name}？`)) return;
                           await api.deleteSource(workspaceId, source.id);
                           await Promise.all([loadWorkspace(workspaceId), loadWorkspaces()]);
                         }}
@@ -390,7 +480,7 @@ export function App() {
                           <button
                             className="tree-toggle"
                             onClick={() => setExpandedTables((items) => expanded ? items.filter((id) => id !== table.id) : [...items, table.id])}
-                            aria-label={expanded ? "Collapse table" : "Expand table"}
+                            aria-label={expanded ? "收起数据表" : "展开数据表"}
                           >{expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}</button>
                           <label className="table-select">
                             <input
@@ -398,7 +488,7 @@ export function App() {
                               checked={selected}
                               onChange={() => setSelectedTables((items) => selected ? items.filter((id) => id !== table.id) : [...items, table.id])}
                             />
-                            <span><strong>{table.display_name}</strong><small>{table.row_count.toLocaleString()} rows</small></span>
+                            <span><strong>{table.display_name}</strong><small>{table.row_count.toLocaleString()} 行</small></span>
                           </label>
                         </div>
                         {expanded && (
@@ -407,7 +497,7 @@ export function App() {
                               <div className="column-block" key={column.id}>
                                 <div className="column-row">
                                   <span><strong>{column.name}</strong><small>{column.data_type}</small></span>
-                                  <button className="icon-button" onClick={() => setEditingColumn(column.id)} title="Edit field semantics" aria-label={`Edit ${column.name}`}><Pencil size={13} /></button>
+                                  <button className="icon-button" onClick={() => setEditingColumn(column.id)} title="编辑字段语义" aria-label={`编辑 ${column.name}`}><Pencil size={13} /></button>
                                 </div>
                                 {(column.description || column.aliases.length > 0) && <p>{column.description || column.aliases.join(", ")}</p>}
                                 {editingColumn === column.id && (
@@ -428,84 +518,81 @@ export function App() {
                       </div>
                     );
                   })}
-                  {!catalog.length && <div className="catalog-empty"><Upload size={20} /><span>Upload a dataset to build the catalog.</span></div>}
+                  {!catalog.length && <div className="catalog-empty"><Upload size={20} /><span>上传数据文件以建立目录。支持 CSV、TSV、XLS、XLSX、Parquet，单文件最大 50 MB。</span></div>}
                 </div>
               </section>
 
               <section className="query-pane">
                 <div className="question-box">
-                  <div className="question-label"><Sparkles size={15} /><span>Ask your data</span>{selectedTables.length > 0 && <small>{selectedTables.length} tables selected</small>}</div>
+                  <div className="question-label"><Sparkles size={15} /><span>提问或发起分析</span>{selectedTables.length > 0 && <small>已选择 {selectedTables.length} 张表</small>}</div>
                   <textarea
                     value={question}
                     onChange={(event) => setQuestion(event.target.value)}
-                    placeholder="例如：按月份汇总销售额并绘制趋势图"
+                    placeholder="例如：分析销售额与折扣率的相关性，并说明计算公式"
                     rows={3}
                     onKeyDown={(event) => {
                       if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) ask();
                     }}
                   />
                   <button className="run-button" onClick={ask} disabled={!question.trim() || !catalog.length || busy === "run"}>
-                    {busy === "run" ? <LoaderCircle className="spin" size={16} /> : <Play size={16} fill="currentColor" />} Run query
+                    {busy === "run" ? <LoaderCircle className="spin" size={16} /> : <Play size={16} fill="currentColor" />} 开始运行
                   </button>
                 </div>
 
                 <div className="result-area">
                   <div className="result-tabs" role="tablist">
-                    {(["answer", "data", "sql"] as const).map((name) => (
-                      <button key={name} className={tab === name ? "active" : ""} onClick={() => setTab(name)} role="tab" aria-selected={tab === name}>{name}</button>
+                    {(["answer", "analysis", "data", "sql"] as const).map((name) => (
+                      <button key={name} className={tab === name ? "active" : ""} onClick={() => setTab(name)} role="tab" aria-selected={tab === name} disabled={name === "analysis" && !activeRun?.payload.analysis}>{TAB_LABELS[name]}</button>
                     ))}
-                    {activeRun && <span className={`run-status ${activeRun.status.toLowerCase()}`}><StatusDot status={activeRun.status} />{activeRun.status}</span>}
+                    {activeRun && <span className={`run-status ${activeRun.status.toLowerCase()}`}><StatusDot status={activeRun.status} />{STATUS_LABELS[activeRun.status]}</span>}
                   </div>
 
                   {!activeRun ? (
-                    <div className="result-placeholder"><Search size={24} /><span>Query results will appear here.</span></div>
+                    <div className="result-placeholder"><Search size={24} /><span>查询、分析、图表和证据会显示在这里。</span></div>
                   ) : activeRun.status === "FAILED" ? (
                     <div className="run-error"><AlertTriangle size={22} /><strong>{activeRun.error_code}</strong><span>{activeRun.error_message}</span></div>
                   ) : tab === "answer" ? (
                     <div className="answer-view">
-                      <div className="answer-text">{activeRun.payload.answer || (activeRun.status === "RUNNING" ? "Running…" : "No answer was generated.")}</div>
+                      <MarkdownText className="answer-text">{activeRun.payload.answer || (activeRun.status === "RUNNING" ? "正在运行…" : "未生成回答。")}</MarkdownText>
                       {(activeRun.payload.warnings ?? []).map((warning) => <div className="warning-row" key={warning}><AlertTriangle size={14} />{warning}</div>)}
-                      {activeRun.payload.analysis?.metrics && (
-                        <div className="metrics-row">
-                          {Object.entries(activeRun.payload.analysis.metrics).map(([key, value]) => <span key={key}><small>{key}</small><strong>{String(value)}</strong></span>)}
-                        </div>
-                      )}
                       {activeRun.payload.chart && (
-                        <Suspense fallback={<div className="chart-loading">Loading chart…</div>}>
+                        <Suspense fallback={<div className="chart-loading">正在加载图表…</div>}>
                           <ChartView chart={activeRun.payload.chart} />
                         </Suspense>
                       )}
                     </div>
+                  ) : tab === "analysis" && activeRun.payload.analysis ? (
+                    <AnalysisView analysis={activeRun.payload.analysis} />
                   ) : tab === "data" ? (
                     <div className="data-view">
                       <div className="scope-line">
-                        <span>{activeRun.payload.scope?.rows_returned ?? 0} preview rows</span>
-                        {activeRun.payload.scope?.preview_truncated && <span>Preview truncated</span>}
+                        <span>{activeRun.payload.scope?.rows_returned ?? 0} 行预览数据</span>
+                        {activeRun.payload.scope?.preview_truncated && <span>预览已截断</span>}
                       </div>
                       <DataTable columns={activeRun.payload.columns ?? []} rows={activeRun.payload.rows ?? []} />
                     </div>
                   ) : (
-                    <pre className="sql-view"><code>{activeRun.payload.sql ?? "No SQL was executed."}</code></pre>
+                    <pre className="sql-view"><code>{activeRun.payload.sql ?? "未执行 SQL。"}</code></pre>
                   )}
                 </div>
 
-                <section className="trace-pane" aria-label="Agent trace">
-                  <div className="trace-heading"><BarChart3 size={15} /><strong>Decision trace</strong><span>{activeRun?.payload.retrieval?.mode ?? "WAITING"}</span></div>
+                <section className="trace-pane" aria-label="Agent 决策轨迹">
+                  <div className="trace-heading"><BarChart3 size={15} /><strong>决策轨迹</strong><span title="混合检索同时使用关键词匹配和 Qdrant 向量语义匹配">{retrievalModeLabel(activeRun?.payload.retrieval?.mode)}</span></div>
                   <div className="trace-grid">
                     <div className="phase-list">
                       {events.length ? events.map((event) => (
-                        <div className="phase-row" key={event.sequence}><StatusDot status={event.level === "error" ? "failed" : "ready"} /><span><strong>{event.phase}</strong><small>{event.message}</small></span><time>{event.sequence}</time></div>
-                      )) : <div className="trace-empty">Run phases will stream here.</div>}
+                        <div className="phase-row" key={event.sequence}><StatusDot status={event.level === "error" ? "failed" : "ready"} /><span><strong>{PHASE_LABELS[event.phase] ?? event.phase}</strong><small>{event.message}</small></span><time>{event.sequence}</time></div>
+                      )) : <div className="trace-empty">运行阶段会在这里实时显示。</div>}
                     </div>
                     <div className="retrieval-list">
                       {(activeRun?.payload.retrieval?.matches ?? []).map((match) => (
                         <div className="retrieval-row" key={`${match.entity_type}-${match.column_id || match.table_id}`}>
-                          <span className="entity-type">{match.entity_type}</span>
-                          <span><strong>{match.label}</strong><small>{match.retrieval_source}</small></span>
+                          <span className="entity-type">{match.entity_type === "table" ? "数据表" : "字段"}</span>
+                          <span><strong>{match.label}</strong><small>{match.retrieval_source === "vector" ? "向量检索" : match.retrieval_source === "hybrid" ? "混合检索" : "词法检索"}</small></span>
                           <code>{match.score.toFixed(4)}</code>
                         </div>
                       ))}
-                      {!(activeRun?.payload.retrieval?.matches ?? []).length && <div className="trace-empty">Retrieved tables and columns will appear here.</div>}
+                      {!(activeRun?.payload.retrieval?.matches ?? []).length && <div className="trace-empty">检索到的表和字段会显示在这里。</div>}
                     </div>
                   </div>
                 </section>
