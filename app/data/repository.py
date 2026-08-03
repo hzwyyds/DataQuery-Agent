@@ -56,6 +56,7 @@ CREATE TABLE IF NOT EXISTS catalog_columns (
 CREATE TABLE IF NOT EXISTS runs (
     id TEXT PRIMARY KEY,
     workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+    conversation_id TEXT REFERENCES conversations(id) ON DELETE SET NULL,
     question TEXT NOT NULL,
     status TEXT NOT NULL,
     payload TEXT NOT NULL DEFAULT '{}',
@@ -79,6 +80,16 @@ CREATE INDEX IF NOT EXISTS idx_sources_workspace ON sources(workspace_id);
 CREATE INDEX IF NOT EXISTS idx_tables_workspace ON catalog_tables(workspace_id);
 CREATE INDEX IF NOT EXISTS idx_columns_workspace ON catalog_columns(workspace_id);
 CREATE INDEX IF NOT EXISTS idx_runs_workspace ON runs(workspace_id, created_at DESC);
+CREATE TABLE IF NOT EXISTS conversations (
+    id TEXT PRIMARY KEY,
+    workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+    title TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'ACTIVE',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_conversations_workspace
+    ON conversations(workspace_id, updated_at DESC);
 """
 
 
@@ -104,6 +115,12 @@ class Repository:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         async with self.connect() as connection:
             await connection.executescript(SCHEMA)
+            columns = await connection.execute_fetchall("PRAGMA table_info(runs)")
+            if not any(row[1] == "conversation_id" for row in columns):
+                await connection.execute(
+                    "ALTER TABLE runs ADD COLUMN conversation_id TEXT "
+                    "REFERENCES conversations(id) ON DELETE SET NULL"
+                )
             await connection.commit()
 
     async def ping(self) -> bool:
@@ -283,23 +300,93 @@ class Repository:
             )
             return [dict(row) for row in await cursor.fetchall()]
 
+    async def create_conversation(self, workspace_id: str, title: str = "新会话") -> dict:
+        await self.get_workspace(workspace_id)
+        conversation_id = str(uuid4())
+        timestamp = now()
+        async with self.connect() as connection:
+            await connection.execute(
+                "INSERT INTO conversations VALUES (?, ?, ?, 'ACTIVE', ?, ?)",
+                (
+                    conversation_id,
+                    workspace_id,
+                    title.strip()[:120] or "新会话",
+                    timestamp,
+                    timestamp,
+                ),
+            )
+            await connection.commit()
+        return await self.get_conversation(conversation_id)
+
+    async def get_conversation(self, conversation_id: str) -> dict:
+        async with self.connect() as connection:
+            cursor = await connection.execute(
+                "SELECT * FROM conversations WHERE id = ?", (conversation_id,)
+            )
+            row = await cursor.fetchone()
+        if row is None:
+            raise KeyError("conversation not found")
+        return dict(row)
+
+    async def list_conversations(self, workspace_id: str) -> list[dict]:
+        async with self.connect() as connection:
+            cursor = await connection.execute(
+                "SELECT * FROM conversations WHERE workspace_id = ? ORDER BY updated_at DESC",
+                (workspace_id,),
+            )
+            return [dict(row) for row in await cursor.fetchall()]
+
+    async def update_conversation(
+        self, conversation_id: str, title: str | None = None, status: str | None = None
+    ) -> dict:
+        conversation = await self.get_conversation(conversation_id)
+        new_title = title.strip()[:120] if title is not None else conversation["title"]
+        new_status = status if status in {"ACTIVE", "ARCHIVED"} else conversation["status"]
+        async with self.connect() as connection:
+            await connection.execute(
+                "UPDATE conversations SET title = ?, status = ?, updated_at = ? WHERE id = ?",
+                (new_title or "新会话", new_status, now(), conversation_id),
+            )
+            await connection.commit()
+        return await self.get_conversation(conversation_id)
+
     async def create_run(
-        self, workspace_id: str, question: str, selected_table_ids: list[str]
+        self,
+        workspace_id: str,
+        question: str,
+        selected_table_ids: list[str],
+        conversation_id: str | None = None,
     ) -> dict:
         await self.get_workspace(workspace_id)
+        if conversation_id is not None:
+            conversation = await self.get_conversation(conversation_id)
+            if conversation["workspace_id"] != workspace_id:
+                raise KeyError("conversation not found")
+        else:
+            conversations = await self.list_conversations(workspace_id)
+            conversation_id = (
+                conversations[0]["id"]
+                if conversations
+                else (await self.create_conversation(workspace_id))["id"]
+            )
         run_id = str(uuid4())
         async with self.connect() as connection:
             await connection.execute(
                 """INSERT INTO runs
-                   (id, workspace_id, question, status, payload, created_at)
-                   VALUES (?, ?, ?, 'RUNNING', ?, ?)""",
+                   (id, workspace_id, conversation_id, question, status, payload, created_at)
+                   VALUES (?, ?, ?, ?, 'RUNNING', ?, ?)""",
                 (
                     run_id,
                     workspace_id,
+                    conversation_id,
                     question,
                     json.dumps({"selected_table_ids": selected_table_ids}),
                     now(),
                 ),
+            )
+            await connection.execute(
+                "UPDATE conversations SET updated_at = ? WHERE id = ?",
+                (now(), conversation_id),
             )
             await connection.commit()
         return await self.get_run(workspace_id, run_id)
@@ -316,6 +403,17 @@ class Repository:
         result = dict(row)
         result["payload"] = json.loads(result["payload"])
         return result
+
+    async def list_conversation_runs(self, conversation_id: str, limit: int = 6) -> list[dict]:
+        async with self.connect() as connection:
+            cursor = await connection.execute(
+                "SELECT * FROM runs WHERE conversation_id = ? ORDER BY created_at DESC LIMIT ?",
+                (conversation_id, min(max(limit, 1), 50)),
+            )
+            rows = [dict(row) for row in await cursor.fetchall()]
+        for row in rows:
+            row["payload"] = json.loads(row["payload"])
+        return rows
 
     async def list_runs(self, workspace_id: str, limit: int = 50) -> list[dict]:
         async with self.connect() as connection:

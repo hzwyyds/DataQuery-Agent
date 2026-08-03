@@ -90,3 +90,19 @@ def test_run_persists_result_and_resumable_phase_events(tmp_path: Path) -> None:
         ]
 
     asyncio.run(run())
+
+
+def test_runs_are_bound_to_explicit_conversations(tmp_path: Path) -> None:
+    async def run() -> None:
+        repository = Repository(tmp_path / "metadata.sqlite3")
+        await repository.initialize()
+        workspace = await repository.create_workspace("Conversations")
+        first = await repository.create_conversation(workspace["id"], "雨量分析")
+        second = await repository.create_conversation(workspace["id"], "流量校验")
+        first_run = await repository.create_run(workspace["id"], "第一问", [], first["id"])
+        await repository.create_run(workspace["id"], "第二问", [], second["id"])
+        runs = await repository.list_conversation_runs(first["id"])
+        assert [item["id"] for item in runs] == [first_run["id"]]
+        assert first_run["conversation_id"] == first["id"]
+
+    asyncio.run(run())

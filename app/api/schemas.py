@@ -33,6 +33,16 @@ class ColumnAnnotation(BaseModel):
     aliases: list[str] = Field(default_factory=list, max_length=20)
 
 
+class ConversationCreate(BaseModel):
+    title: str = Field(default="新会话", min_length=1, max_length=120)
+
+
+class ConversationUpdate(BaseModel):
+    title: str | None = Field(default=None, min_length=1, max_length=120)
+    status: str | None = None
+
+
 class RunCreate(BaseModel):
     question: str = Field(min_length=2, max_length=2000)
     selected_table_ids: list[str] = Field(default_factory=list, max_length=12)
+    conversation_id: str | None = None

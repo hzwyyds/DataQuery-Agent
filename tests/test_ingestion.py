@@ -8,7 +8,7 @@ import xlwt
 from app.core.config import Settings
 from app.data.ingestion import SUPPORTED_SUFFIXES, IngestionService
 from app.data.repository import Repository
-from app.data.storage import WorkspaceStorage
+from app.data.storage import WorkspaceStorage, safe_filename
 
 
 def ingest_fixture(tmp_path: Path, suffix: str) -> list[dict]:
@@ -96,6 +96,11 @@ def test_excel_extensions_include_xls_and_xlsx() -> None:
     assert {".xls", ".xlsx"} <= SUPPORTED_SUFFIXES
 
 
+def test_safe_filename_preserves_extension_for_chinese_names() -> None:
+    assert safe_filename("石鼓.xlsx").endswith(".xlsx")
+    assert safe_filename("日尺度/石鼓.xlsx").endswith(".xlsx")
+
+
 def test_excel_ingestion_creates_one_table_per_nonempty_sheet(tmp_path: Path) -> None:
     catalog = ingest_fixture(tmp_path, ".xlsx")
 
@@ -103,6 +108,44 @@ def test_excel_ingestion_creates_one_table_per_nonempty_sheet(tmp_path: Path) ->
         "orders / Orders",
         "orders / Regions",
     }
+
+
+def test_excel_headerless_sheet_reuses_workbook_headers(tmp_path: Path) -> None:
+    async def run() -> list[dict]:
+        config = Settings(data_dir=tmp_path)
+        repository = Repository(tmp_path / "metadata.sqlite3")
+        storage = WorkspaceStorage(config)
+        storage.ensure()
+        await repository.initialize()
+        workspace = await repository.create_workspace("Hydrology")
+        source_id = str(uuid4())
+        source_dir = storage.source_dir(workspace["id"], source_id)
+        source_dir.mkdir(parents=True)
+        path = source_dir / "hydrology.xlsx"
+        columns = ["date", "observed_flow", "simulated_flow"]
+        with pd.ExcelWriter(path) as writer:
+            pd.DataFrame(
+                [["2024-01-01", 10, 11], ["2024-01-02", 20, 19]], columns=columns
+            ).to_excel(writer, sheet_name="Database", index=False)
+            pd.DataFrame(
+                [["2024-04-25", 30, 31], ["2024-04-26", 40, 39]]
+            ).to_excel(writer, sheet_name="Test", index=False, header=False)
+        await repository.add_source(
+            workspace["id"], source_id, path.name, path.name, path.stat().st_size
+        )
+        await IngestionService(repository, storage).ingest(
+            workspace["id"], source_id, path, path.name
+        )
+        return await repository.catalog(workspace["id"])
+
+    catalog = asyncio.run(run())
+    test_table = next(table for table in catalog if table["display_name"] == "hydrology / Test")
+    assert test_table["row_count"] == 2
+    assert [column["name"] for column in test_table["columns"]] == [
+        "date",
+        "observed_flow",
+        "simulated_flow",
+    ]
 
 
 def test_xls_ingestion_creates_one_table_per_nonempty_sheet(tmp_path: Path) -> None:

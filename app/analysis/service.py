@@ -5,6 +5,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from app.analysis.formula import FormulaError, evaluate_formula
 from app.query.contracts import AnalysisResult, AnalysisSpec, QueryResult
 
 
@@ -17,14 +18,33 @@ def records(frame: pd.DataFrame, limit: int = 500) -> list[dict[str, Any]]:
 
 
 class AnalysisService:
-    max_rows = 100_000
+    max_rows = 100_000_000
 
     def run(self, spec: AnalysisSpec, result: QueryResult) -> AnalysisResult:
         if result.scope.preview_truncated and result.scope.rows_returned >= self.max_rows:
-            raise AnalysisError("analysis exceeds 100,000 rows; filter or aggregate the query")
+            raise AnalysisError(
+                "当前分析需要读取超过 1 亿行，已停止执行；请先按时间、区域或指标筛选，或先聚合"
+            )
         frame = pd.DataFrame(result.rows)
         self.require_columns(frame, spec.columns)
         return getattr(self, f"_{spec.operation}")(frame, spec)
+
+    def _formula(self, frame: pd.DataFrame, spec: AnalysisSpec) -> AnalysisResult:
+        custom = spec.custom_formula
+        if custom is None:
+            raise AnalysisError("通用公式分析缺少公式定义")
+        variables = custom.variables or list(frame.columns)
+        self.require_columns(frame, variables)
+        try:
+            value = evaluate_formula(custom.expression, frame, variables)
+        except FormulaError as exc:
+            raise AnalysisError(str(exc)) from exc
+        return AnalysisResult(
+            operation=spec.operation,
+            columns=variables,
+            **self.result_metadata(spec, frame),
+            metrics={custom.name: value},
+        )
 
     @staticmethod
     def require_columns(frame: pd.DataFrame, columns: list[str]) -> None:
@@ -48,14 +68,38 @@ class AnalysisService:
             return f"按 {', '.join(spec.group_by)} 分组，对 {columns} 计算 {spec.aggregation}"
         if spec.operation == "correlation":
             return f"Pearson r({spec.columns[0]}, {spec.columns[1]})"
+        if spec.operation == "nse":
+            return (
+                f"NSE = 1 - sum(({spec.columns[1]} - mean({spec.columns[0]}))^2) / "
+                f"sum(({spec.columns[0]} - mean({spec.columns[0]}))^2)"
+            )
+        if spec.operation == "kge":
+            return (
+                "KGE = 1 - sqrt((r - 1)^2 + (alpha - 1)^2 + (beta - 1)^2); "
+                "alpha = std(sim) / std(obs), beta = mean(sim) / mean(obs)"
+            )
+        if spec.operation == "nse_kge":
+            return (
+                f"NSE = 1 - sum(({spec.columns[1]} - {spec.columns[0]})^2) / "
+                f"sum(({spec.columns[0]} - mean({spec.columns[0]}))^2); "
+                "KGE = 1 - sqrt((r - 1)^2 + (alpha - 1)^2 + (beta - 1)^2)"
+            )
         if spec.operation == "trend":
             return f"按时间排序，变化量 = last({spec.columns[1]}) - first({spec.columns[1]})"
         return f"IQR = Q3({columns}) - Q1({columns})；异常值在 [Q1 - 1.5IQR, Q3 + 1.5IQR] 外"
 
     def result_metadata(self, spec: AnalysisSpec, frame: pd.DataFrame) -> dict[str, Any]:
+        formula = (
+            spec.custom_formula.expression
+            if spec.operation == "formula" and spec.custom_formula
+            else spec.formula.strip() or self.default_formula(spec)
+        )
+        intent = spec.intent.strip() or (
+            spec.custom_formula.name if spec.operation == "formula" and spec.custom_formula else ""
+        )
         return {
-            "formula": spec.formula.strip() or self.default_formula(spec),
-            "intent": spec.intent.strip(),
+            "formula": formula,
+            "intent": intent,
             "input_rows": int(len(frame)),
         }
 
@@ -125,6 +169,77 @@ class AnalysisService:
                 "correlation": float(paired.corr().iloc[0, 1]),
                 "pairs": int(len(paired)),
             },
+        )
+
+    def _paired_values(
+        self, frame: pd.DataFrame, spec: AnalysisSpec, metric: str
+    ) -> tuple[pd.Series, pd.Series, pd.DataFrame]:
+        if len(spec.columns) != 2:
+            raise AnalysisError(
+                f"{metric} requires exactly two numeric columns: observed, simulated"
+            )
+        observed = pd.to_numeric(frame[spec.columns[0]], errors="coerce")
+        simulated = pd.to_numeric(frame[spec.columns[1]], errors="coerce")
+        paired = pd.DataFrame(
+            {spec.columns[0]: observed, spec.columns[1]: simulated}
+        ).dropna()
+        if len(paired) < 2:
+            raise AnalysisError(
+                f"{metric} requires at least two complete observed/simulated pairs"
+            )
+        return paired.iloc[:, 0], paired.iloc[:, 1], paired
+
+    def _nse(self, frame: pd.DataFrame, spec: AnalysisSpec) -> AnalysisResult:
+        observed, simulated, paired = self._paired_values(frame, spec, "NSE")
+        denominator = float(((observed - observed.mean()) ** 2).sum())
+        if denominator == 0:
+            raise AnalysisError("NSE requires observed values with non-zero variance")
+        nse = 1 - float(((simulated - observed) ** 2).sum()) / denominator
+        return AnalysisResult(
+            operation=spec.operation,
+            columns=spec.columns,
+            **self.result_metadata(spec, frame),
+            rows=records(paired),
+            metrics={"nse": float(nse), "pairs": int(len(paired))},
+        )
+
+    def _kge(self, frame: pd.DataFrame, spec: AnalysisSpec) -> AnalysisResult:
+        observed, simulated, paired = self._paired_values(frame, spec, "KGE")
+        observed_std = float(observed.std(ddof=1))
+        observed_mean = float(observed.mean())
+        if observed_std == 0 or observed_mean == 0:
+            raise AnalysisError(
+                "KGE requires observed values with non-zero mean and variance"
+            )
+        correlation = float(paired.iloc[:, 0].corr(paired.iloc[:, 1]))
+        alpha = float(simulated.std(ddof=1)) / observed_std
+        beta = float(simulated.mean()) / observed_mean
+        kge = 1 - (
+            (correlation - 1) ** 2 + (alpha - 1) ** 2 + (beta - 1) ** 2
+        ) ** 0.5
+        return AnalysisResult(
+            operation=spec.operation,
+            columns=spec.columns,
+            **self.result_metadata(spec, frame),
+            rows=records(paired),
+            metrics={
+                "kge": float(kge),
+                "correlation": correlation,
+                "alpha": alpha,
+                "beta": beta,
+                "pairs": int(len(paired)),
+            },
+        )
+
+    def _nse_kge(self, frame: pd.DataFrame, spec: AnalysisSpec) -> AnalysisResult:
+        nse = self._nse(frame, spec.model_copy(update={"operation": "nse"}))
+        kge = self._kge(frame, spec.model_copy(update={"operation": "kge"}))
+        return AnalysisResult(
+            operation=spec.operation,
+            columns=spec.columns,
+            **self.result_metadata(spec, frame),
+            rows=nse.rows,
+            metrics={**nse.metrics, **kge.metrics},
         )
 
     def _trend(self, frame: pd.DataFrame, spec: AnalysisSpec) -> AnalysisResult:

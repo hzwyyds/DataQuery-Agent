@@ -66,9 +66,34 @@ def normalized_numbers(text: str) -> set[str]:
     return normalized
 
 
+def numeric_tokens(text: str) -> list[tuple[Decimal, bool]]:
+    tokens = []
+    for value in NUMBER.findall(text):
+        raw = value.removesuffix("%").lstrip("+")
+        try:
+            tokens.append((Decimal(raw), "." not in raw))
+        except InvalidOperation:
+            continue
+    return tokens
+
+
+def numbers_supported(claim: str, evidence_text: str) -> bool:
+    supported = numeric_tokens(evidence_text)
+    for value, is_integer in numeric_tokens(claim):
+        if is_integer:
+            if not any(value == candidate for candidate, _ in supported):
+                return False
+            continue
+        decimals = max(1, -value.as_tuple().exponent)
+        tolerance = Decimal("0.5") * (Decimal(10) ** -decimals)
+        if not any(abs(value - candidate) <= tolerance for candidate, _ in supported):
+            return False
+    return True
+
+
 def validate_answer(draft: AnswerDraft, evidence: list[dict]) -> bool:
     by_id = {item["id"]: item["fact"] for item in evidence}
-    supported = set().union(*(normalized_numbers(fact) for fact in by_id.values()))
+    supported = "\n".join(by_id.values())
     narratives = [
         draft.summary,
         draft.interpretation,
@@ -76,16 +101,13 @@ def validate_answer(draft: AnswerDraft, evidence: list[dict]) -> bool:
         *draft.recommendations,
         *draft.caveats,
     ]
-    if any(not normalized_numbers(text) <= supported for text in narratives):
+    if any(not numbers_supported(text, supported) for text in narratives):
         return False
     for finding in draft.findings:
         if any(identity not in by_id for identity in finding.evidence_ids):
             return False
-        claims = normalized_numbers(finding.text)
-        finding_supported = set().union(
-            *(normalized_numbers(by_id[identity]) for identity in finding.evidence_ids)
-        )
-        if not claims <= finding_supported:
+        finding_supported = "\n".join(by_id[identity] for identity in finding.evidence_ids)
+        if not numbers_supported(finding.text, finding_supported):
             return False
     return True
 
@@ -162,6 +184,9 @@ def fallback_analysis_answer(analysis: AnalysisResult) -> str:
         "correlation": "Pearson 相关性",
         "trend": "趋势分析",
         "outlier_iqr": "IQR 异常值检测",
+        "nse": "Nash-Sutcliffe 效率系数（NSE）",
+        "kge": "Kling-Gupta 效率系数（KGE）",
+        "nse_kge": "Nash-Sutcliffe 与 Kling-Gupta 效率系数（NSE / KGE）",
     }
     operation = operation_labels.get(analysis.operation, analysis.operation)
     sections = [

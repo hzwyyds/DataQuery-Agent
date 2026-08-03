@@ -24,6 +24,10 @@ class QueryTimeout(RuntimeError):
     pass
 
 
+class QueryTooLarge(RuntimeError):
+    pass
+
+
 class DuckDBQueryExecutor:
     def __init__(self, storage: WorkspaceStorage):
         self.storage = storage
@@ -80,6 +84,29 @@ class DuckDBQueryExecutor:
                 preview_truncated=truncated,
             ),
         )
+
+    async def count_rows(
+        self, workspace_id: str, sql: str, *, max_rows: int, timeout_seconds: float = 15
+    ) -> int:
+        connection = self.connect(workspace_id)
+        statement = f"SELECT COUNT(*) FROM ({sql.rstrip(';')}) AS dataquery_count"
+
+        def run() -> int:
+            return int(connection.execute(statement).fetchone()[0])
+
+        task = asyncio.create_task(asyncio.to_thread(run))
+        try:
+            count = await asyncio.wait_for(task, timeout_seconds)
+        except TimeoutError as exc:
+            connection.interrupt()
+            raise QueryTimeout(f"query exceeded {timeout_seconds:g} seconds") from exc
+        finally:
+            connection.close()
+        if count > max_rows:
+            raise QueryTooLarge(
+                "当前分析需要读取超过 1 亿行，已停止执行；请先按时间、区域或指标筛选，或先聚合"
+            )
+        return count
 
     async def explain(self, workspace_id: str, sql: str) -> list[list[str]]:
         connection = self.connect(workspace_id)

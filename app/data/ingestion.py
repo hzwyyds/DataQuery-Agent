@@ -63,10 +63,36 @@ class IngestionService:
         try:
             if suffix in {".xls", ".xlsx"}:
                 workbook = pd.ExcelFile(path)
-                entries = [
-                    (sheet, pd.read_excel(path, sheet_name=sheet)) for sheet in workbook.sheet_names
+                raw_entries = [
+                    (sheet, pd.read_excel(path, sheet_name=sheet, header=None))
+                    for sheet in workbook.sheet_names
                 ]
-                entries = [(name, frame) for name, frame in entries if not frame.empty]
+                reference_columns = next(
+                    (
+                        [str(value) for value in frame.iloc[0].tolist()]
+                        for _, frame in raw_entries
+                        if not frame.empty and self._looks_like_header(frame.iloc[0])
+                    ),
+                    [],
+                )
+                entries = []
+                for sheet, raw in raw_entries:
+                    if raw.empty:
+                        continue
+                    if self._looks_like_header(raw.iloc[0]):
+                        columns = [str(value) for value in raw.iloc[0].tolist()]
+                        frame = raw.iloc[1:].copy()
+                    else:
+                        frame = raw.copy()
+                        columns = (
+                            reference_columns
+                            if len(reference_columns) == frame.shape[1]
+                            else [f"column_{index + 1}" for index in range(frame.shape[1])]
+                        )
+                    frame.columns = columns
+                    frame = frame.dropna(how="all")
+                    if not frame.empty:
+                        entries.append((sheet, frame))
                 if not entries:
                     raise ValueError("the workbook does not contain a non-empty sheet")
                 for index, (sheet, frame) in enumerate(entries, 1):
@@ -112,6 +138,14 @@ class IngestionService:
             raise
         finally:
             connection.close()
+
+    @staticmethod
+    def _looks_like_header(row: pd.Series) -> bool:
+        values = [value for value in row.tolist() if not pd.isna(value)]
+        if not values:
+            return False
+        strings = sum(isinstance(value, str) and bool(value.strip()) for value in values)
+        return strings * 2 > len(values)
 
     def _profile(
         self,

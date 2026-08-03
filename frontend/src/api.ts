@@ -1,8 +1,10 @@
 import type {
   CatalogColumn,
   CatalogTable,
+  Conversation,
   RagStatus,
   Run,
+  RunEvent,
   Source,
   Workspace,
 } from "./types";
@@ -33,6 +35,14 @@ export const api = {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name }),
+    }),
+  conversations: (workspaceId: string) =>
+    request<{ conversations: Conversation[] }>("/api/v1/workspaces/" + workspaceId + "/conversations"),
+  createConversation: (workspaceId: string, title = "新会话") =>
+    request<Conversation>("/api/v1/workspaces/" + workspaceId + "/conversations", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title }),
     }),
   sources: (workspaceId: string) =>
     request<Source[]>(`/api/v1/workspaces/${workspaceId}/sources`),
@@ -68,14 +78,18 @@ export const api = {
     request<RagStatus>(`/api/v1/workspaces/${workspaceId}/rag/status`),
   reindex: (workspaceId: string) =>
     request(`/api/v1/workspaces/${workspaceId}/rag/reindex`, { method: "POST" }),
-  createRun: (workspaceId: string, question: string, selectedTableIds: string[]) =>
+  createRun: (workspaceId: string, question: string, selectedTableIds: string[], conversationId?: string) =>
     request<Run>(`/api/v1/workspaces/${workspaceId}/runs`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ question, selected_table_ids: selectedTableIds }),
+      body: JSON.stringify({ question, selected_table_ids: selectedTableIds, conversation_id: conversationId }),
     }),
   runs: (workspaceId: string) =>
-    request<{ runs: Run[] }>(`/api/v1/workspaces/${workspaceId}/runs`),
+    request<{ runs: Run[] }>(`/api/v1/workspaces/${workspaceId}/runs?limit=200`),
   run: (workspaceId: string, runId: string) =>
     request<Run>(`/api/v1/workspaces/${workspaceId}/runs/${runId}`),
+  events: (workspaceId: string, runId: string) =>
+    request<RunEvent[]>(`/api/v1/workspaces/${workspaceId}/runs/${runId}/events/history`),
+  downloadUrl: (workspaceId: string, runId: string, kind: "result" | "analysis") =>
+    `${API_BASE}/api/v1/workspaces/${workspaceId}/runs/${runId}/download?kind=${kind}`,
 };

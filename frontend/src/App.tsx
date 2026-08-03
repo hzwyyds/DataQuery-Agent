@@ -6,6 +6,7 @@ import {
   ChevronRight,
   CirclePlus,
   Database,
+  Download,
   FileSpreadsheet,
   LoaderCircle,
   Pencil,
@@ -24,6 +25,7 @@ import { MarkdownText } from "./MarkdownText";
 import type {
   CatalogColumn,
   CatalogTable,
+  Conversation,
   RagStatus,
   Run,
   RunEvent,
@@ -69,9 +71,14 @@ const ANALYSIS_LABELS: Record<string, string> = {
   correlation: "相关性分析",
   trend: "趋势分析",
   outlier_iqr: "IQR 异常值检测",
+  nse: "Nash-Sutcliffe 效率系数（NSE）",
+  kge: "Kling-Gupta 效率系数（KGE）",
+  nse_kge: "NSE / KGE 效率系数",
 };
 const METRIC_LABELS: Record<string, string> = {
   aggregation: "聚合方式",
+  alpha: "变异性比率 α",
+  beta: "偏差比率 β",
   change: "变化量",
   correlation: "相关系数",
   direction: "趋势方向",
@@ -82,6 +89,8 @@ const METRIC_LABELS: Record<string, string> = {
   lower_bound: "下界",
   outlier_count: "异常值数",
   pairs: "有效样本对",
+  nse: "NSE",
+  kge: "KGE",
   q1: "Q1",
   q3: "Q3",
   upper_bound: "上界",
@@ -98,6 +107,10 @@ const RETRIEVAL_MODE_LABELS: Record<string, string> = {
 function retrievalModeLabel(mode?: string) {
   if (!mode) return "等待中";
   return RETRIEVAL_MODE_LABELS[mode] ?? mode;
+}
+
+function isAnswerTab(tab: "answer" | "analysis" | "data" | "sql") {
+  return tab === "answer";
 }
 
 function formatBytes(bytes: number) {
@@ -215,12 +228,64 @@ function AnalysisView({ analysis }: { analysis: NonNullable<RunPayload["analysis
   );
 }
 
+function ConversationThread({
+  runs,
+  activeRunId,
+  onSelect,
+}: {
+  runs: Run[];
+  activeRunId?: string;
+  onSelect: (runId: string) => void;
+}) {
+  if (!runs.length) {
+    return <div className="result-placeholder"><Search size={24} /><span>在这个会话中提出第一个问题。</span></div>;
+  }
+  return (
+    <div className="conversation-thread" aria-label="当前会话">
+      {runs.map((run) => (
+        <article
+          className={run.id === activeRunId ? "chat-turn active" : "chat-turn"}
+          key={run.id}
+          onClick={() => onSelect(run.id)}
+        >
+          <div className="chat-message user-message">
+            <small>你</small>
+            <p>{run.question}</p>
+          </div>
+          <div className="chat-message agent-message">
+            <small>DataQuery Agent</small>
+            {run.status === "FAILED" ? (
+              <p>{run.error_message || "本轮运行失败。"}</p>
+            ) : run.status === "RUNNING" ? (
+              <p>正在检索、规划并计算…</p>
+            ) : (
+              <>
+                <MarkdownText>{run.payload.answer || "本轮未生成回答。"}</MarkdownText>
+                {(run.payload.warnings ?? []).map((warning) => (
+                  <div className="warning-row" key={warning}><AlertTriangle size={14} />{warning}</div>
+                ))}
+                {run.payload.chart && (
+                  <Suspense fallback={<div className="chart-loading">正在加载图表…</div>}>
+                    <ChartView chart={run.payload.chart} />
+                  </Suspense>
+                )}
+              </>
+            )}
+          </div>
+        </article>
+      ))}
+    </div>
+  );
+}
+
 export function App() {
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [workspaceId, setWorkspaceId] = useState("");
   const [sources, setSources] = useState<Source[]>([]);
   const [catalog, setCatalog] = useState<CatalogTable[]>([]);
   const [runs, setRuns] = useState<Run[]>([]);
+  const [conversations, setConversations] = useState<Conversation[]>([]);
+  const [conversationId, setConversationId] = useState("");
   const [ragStatus, setRagStatus] = useState<RagStatus | null>(null);
   const [newWorkspace, setNewWorkspace] = useState("");
   const [question, setQuestion] = useState("");
@@ -235,6 +300,9 @@ export function App() {
   const fileInput = useRef<HTMLInputElement>(null);
 
   const workspace = workspaces.find((item) => item.id === workspaceId);
+  const conversationRuns = runs
+    .filter((run) => !conversationId || run.conversation_id === conversationId)
+    .sort((left, right) => left.created_at.localeCompare(right.created_at));
 
   const loadWorkspaces = useCallback(async () => {
     const items = await api.workspaces();
@@ -244,15 +312,19 @@ export function App() {
 
   const loadWorkspace = useCallback(async (id: string) => {
     if (!id) return;
-    const [sourceItems, catalogResult, history, status] = await Promise.all([
+    const [sourceItems, catalogResult, history, status, conversationResult] = await Promise.all([
       api.sources(id),
       api.catalog(id),
       api.runs(id),
       api.ragStatus(id),
+      api.conversations(id),
     ]);
     setSources(sourceItems);
     setCatalog(catalogResult.tables);
     setRuns(history.runs);
+    setConversations(conversationResult.conversations);
+    const latestConversationId = history.runs.find((run) => run.conversation_id)?.conversation_id;
+    setConversationId((current) => current || latestConversationId || conversationResult.conversations[0]?.id || "");
     setRagStatus(status);
     setExpandedTables(catalogResult.tables.map((table) => table.id));
   }, []);
@@ -265,15 +337,36 @@ export function App() {
     setActiveRun(null);
     setEvents([]);
     setSelectedTables([]);
+    setConversationId("");
     loadWorkspace(workspaceId).catch((cause: Error) => setError(cause.message));
   }, [loadWorkspace, workspaceId]);
 
   const refreshRun = useCallback(async (runId: string) => {
     if (!workspaceId) return;
-    const [run, history] = await Promise.all([api.run(workspaceId, runId), api.runs(workspaceId)]);
+    const [run, history, persistedEvents] = await Promise.all([
+      api.run(workspaceId, runId),
+      api.runs(workspaceId),
+      api.events(workspaceId, runId),
+    ]);
     setActiveRun(run);
     setRuns(history.runs);
+    setEvents(persistedEvents);
     setBusy("");
+  }, [workspaceId]);
+
+  const selectRun = useCallback(async (runId: string) => {
+    if (!workspaceId) return;
+    try {
+      const [run, persistedEvents] = await Promise.all([
+        api.run(workspaceId, runId),
+        api.events(workspaceId, runId),
+      ]);
+      setActiveRun(run);
+      setEvents(persistedEvents);
+      setTab("answer");
+    } catch (cause) {
+      setError((cause as Error).message);
+    }
   }, [workspaceId]);
 
   function subscribe(runId: string) {
@@ -311,6 +404,23 @@ export function App() {
     }
   }
 
+  async function createConversation() {
+    if (!workspaceId) return;
+    setBusy("conversation");
+    try {
+      const conversation = await api.createConversation(workspaceId);
+      setConversations((items) => [conversation, ...items]);
+      setConversationId(conversation.id);
+      setRuns([]);
+      setActiveRun(null);
+      setEvents([]);
+    } catch (cause) {
+      setError((cause as Error).message);
+    } finally {
+      setBusy("");
+    }
+  }
+
   async function upload(file?: File) {
     if (!file || !workspaceId) return;
     if (file.size > MAX_FILE_BYTES) {
@@ -338,7 +448,7 @@ export function App() {
     setEvents([]);
     setTab("answer");
     try {
-      const run = await api.createRun(workspaceId, question.trim(), selectedTables);
+      const run = await api.createRun(workspaceId, question.trim(), selectedTables, conversationId);
       setActiveRun(run);
       subscribe(run.id);
     } catch (cause) {
@@ -407,13 +517,39 @@ export function App() {
             {busy === "workspace" ? <LoaderCircle className="spin" size={16} /> : <CirclePlus size={16} />}
           </button>
         </div>
+        <div className="history-block conversation-block">
+          <div className="rail-heading">
+            <span>会话</span>
+            <button className="icon-button" onClick={createConversation} disabled={busy === "conversation"} title="新建会话" aria-label="新建会话">
+              {busy === "conversation" ? <LoaderCircle className="spin" size={14} /> : <CirclePlus size={14} />}
+            </button>
+          </div>
+          <nav className="conversation-list" aria-label="会话列表">
+            {conversations.map((conversation) => (
+              <button
+                key={conversation.id}
+                className={conversation.id === conversationId ? "conversation-item active" : "conversation-item"}
+                onClick={async () => {
+                  setConversationId(conversation.id);
+                  const history = await api.runs(workspaceId);
+                  setRuns(history.runs.filter((run) => run.conversation_id === conversation.id));
+                  setActiveRun(null);
+                  setEvents([]);
+                }}
+              >
+                <Sparkles size={13} />
+                <span>{conversation.title}</span>
+              </button>
+            ))}
+          </nav>
+        </div>
         <div className="history-block">
           <div className="rail-heading"><span>最近运行</span></div>
-          {runs.slice(0, 8).map((run) => (
+          {runs.filter((run) => !conversationId || run.conversation_id === conversationId).map((run) => (
             <button
               key={run.id}
               className="history-item"
-              onClick={() => { setActiveRun(run); setEvents([]); setTab("answer"); }}
+              onClick={() => selectRun(run.id)}
             >
               <StatusDot status={run.status} />
               <span><strong>{run.question}</strong><small>{formatTime(run.created_at)}</small></span>
@@ -545,13 +681,29 @@ export function App() {
                       <button key={name} className={tab === name ? "active" : ""} onClick={() => setTab(name)} role="tab" aria-selected={tab === name} disabled={name === "analysis" && !activeRun?.payload.analysis}>{TAB_LABELS[name]}</button>
                     ))}
                     {activeRun && <span className={`run-status ${activeRun.status.toLowerCase()}`}><StatusDot status={activeRun.status} />{STATUS_LABELS[activeRun.status]}</span>}
+                    {activeRun?.status === "COMPLETED" && (tab === "analysis" ? activeRun.payload.analysis : activeRun.payload.columns?.length) && (
+                      <a
+                        className="icon-button"
+                        href={api.downloadUrl(workspaceId, activeRun.id, tab === "analysis" ? "analysis" : "result")}
+                        title={tab === "analysis" ? "下载分析结果 CSV" : "下载查询结果 CSV"}
+                        aria-label={tab === "analysis" ? "下载分析结果 CSV" : "下载查询结果 CSV"}
+                      >
+                        <Download size={15} />
+                      </a>
+                    )}
                   </div>
 
-                  {!activeRun ? (
+                  {isAnswerTab(tab) ? (
+                    <ConversationThread
+                      runs={conversationRuns}
+                      activeRunId={activeRun?.id}
+                      onSelect={(runId) => { selectRun(runId).catch((cause: Error) => setError(cause.message)); }}
+                    />
+                  ) : !activeRun ? (
                     <div className="result-placeholder"><Search size={24} /><span>查询、分析、图表和证据会显示在这里。</span></div>
                   ) : activeRun.status === "FAILED" ? (
                     <div className="run-error"><AlertTriangle size={22} /><strong>{activeRun.error_code}</strong><span>{activeRun.error_message}</span></div>
-                  ) : tab === "answer" ? (
+                  ) : Boolean(activeRun) && isAnswerTab(tab) ? (
                     <div className="answer-view">
                       <MarkdownText className="answer-text">{activeRun.payload.answer || (activeRun.status === "RUNNING" ? "正在运行…" : "未生成回答。")}</MarkdownText>
                       {(activeRun.payload.warnings ?? []).map((warning) => <div className="warning-row" key={warning}><AlertTriangle size={14} />{warning}</div>)}

@@ -7,7 +7,7 @@ from fastapi.encoders import jsonable_encoder
 
 from app.agent.graph import AgentRuntime, run_agent
 from app.data.repository import Repository
-from app.query.executor import QueryTimeout
+from app.query.executor import QueryTimeout, QueryTooLarge
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +48,7 @@ async def execute_run(
     workspace_id: str,
     question: str,
     selected_table_ids: list[str],
+    conversation_id: str | None = None,
 ) -> None:
     async def record_phase(phase: str) -> None:
         await repository.append_event(run_id, phase, PHASE_MESSAGES[phase])
@@ -58,9 +59,19 @@ async def execute_run(
             workspace_id,
             question,
             selected_table_ids,
+            conversation_id=conversation_id,
             on_phase=record_phase,
         )
         if state.get("error"):
+            await repository.fail_run(run_id, "AGENT_ERROR", state["error"])
+            await repository.append_event(
+                run_id,
+                "failed",
+                state["error"],
+                {"error_code": "AGENT_ERROR", "message": state["error"]},
+                level="error",
+            )
+            return
             await repository.fail_run(
                 run_id, "AGENT_ERROR", "分析计划无法完成，请调整问题或字段范围"
             )
@@ -75,6 +86,11 @@ async def execute_run(
         payload = result_payload(state)
         await repository.complete_run(run_id, payload)
         await repository.append_event(run_id, "completed", "运行完成")
+    except QueryTooLarge as exc:
+        await repository.fail_run(run_id, "QUERY_TOO_LARGE", str(exc))
+        await repository.append_event(
+            run_id, "failed", str(exc), {"error_code": "QUERY_TOO_LARGE"}, level="error"
+        )
     except QueryTimeout:
         await repository.fail_run(run_id, "QUERY_TIMEOUT", "查询超过时间限制")
         await repository.append_event(
@@ -98,7 +114,7 @@ async def execute_run(
         )
     except Exception:
         logger.exception("Run %s failed", run_id)
-        await repository.fail_run(run_id, "RUN_FAILED", "The run failed unexpectedly")
+        await repository.fail_run(run_id, "RUN_FAILED", "运行发生未预期错误，请查看本地日志")
         await repository.append_event(
             run_id,
             "failed",

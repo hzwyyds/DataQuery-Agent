@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class QueryScope(BaseModel):
@@ -29,6 +29,12 @@ class AnalysisResult(BaseModel):
     metrics: dict[str, Any] = Field(default_factory=dict)
 
 
+class FormulaSpec(BaseModel):
+    name: str = Field(min_length=1, max_length=80)
+    variables: list[str] = Field(default_factory=list, max_length=8)
+    expression: str = Field(min_length=1, max_length=500)
+
+
 class ChartResult(BaseModel):
     type: Literal["line", "bar", "scatter"]
     x: str
@@ -41,18 +47,39 @@ class ChartResult(BaseModel):
 
 
 class AnalysisSpec(BaseModel):
-    operation: Literal["describe", "group_aggregate", "correlation", "trend", "outlier_iqr"]
+    operation: Literal[
+        "describe",
+        "group_aggregate",
+        "correlation",
+        "trend",
+        "outlier_iqr",
+        "nse",
+        "kge",
+        "nse_kge",
+        "formula",
+    ]
     columns: list[str] = Field(default_factory=list, max_length=12)
     group_by: list[str] = Field(default_factory=list, max_length=4)
     aggregation: Literal["sum", "mean", "min", "max", "count", "median"] = "mean"
     formula: str = Field(default="", max_length=500)
     intent: str = Field(default="", max_length=300)
+    custom_formula: FormulaSpec | None = None
+
+    @field_validator("group_by", mode="before")
+    @classmethod
+    def normalize_group_by(cls, value: list[str] | None) -> list[str]:
+        return value or []
+
+    @field_validator("aggregation", mode="before")
+    @classmethod
+    def normalize_aggregation(cls, value: str | None) -> str:
+        return value or "mean"
 
 
 class ChartSpec(BaseModel):
     type: Literal["line", "bar", "scatter"]
     x: str
-    y: list[str] = Field(min_length=1, max_length=3)
+    y: list[str] = Field(min_length=1, max_length=12)
     series: str | None = None
 
 

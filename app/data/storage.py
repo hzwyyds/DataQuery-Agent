@@ -15,8 +15,11 @@ def validate_id(value: str) -> str:
 
 
 def safe_filename(value: str) -> str:
-    name = _SAFE_NAME.sub("_", Path(value).name).strip("._")
-    return name[:160] or "dataset"
+    original = Path(value).name
+    suffix = Path(original).suffix.lower()
+    stem = _SAFE_NAME.sub("_", Path(original).stem).strip("._") or "dataset"
+    max_stem_length = max(1, 160 - len(suffix))
+    return f"{stem[:max_stem_length]}{suffix}"
 
 
 class WorkspaceStorage:

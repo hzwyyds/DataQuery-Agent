@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import csv
+import io
 import json
 from pathlib import Path
 from uuid import uuid4
@@ -15,6 +17,8 @@ from app.analysis.chart import ChartService
 from app.analysis.service import AnalysisService
 from app.api.schemas import (
     ColumnAnnotation,
+    ConversationCreate,
+    ConversationUpdate,
     RunCreate,
     SourceView,
     WorkspaceCreate,
@@ -121,6 +125,13 @@ async def upload_file(workspace_id: str, file: UploadFile = File(...)):
         await ingestion.ingest(workspace_id, source_id, target, original_name)
         await rag.index_source(workspace_id, source_id)
         return await repository.get_source(source_id)
+    except ValueError as exc:
+        storage.remove_source(workspace_id, source_id)
+        try:
+            await repository.delete_source(workspace_id, source_id)
+        except KeyError:
+            pass
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     except Exception:
         storage.remove_source(workspace_id, source_id)
         try:
@@ -191,11 +202,51 @@ async def update_column_annotation(workspace_id: str, column_id: str, payload: C
     return column
 
 
+@router.get("/workspaces/{workspace_id}/conversations")
+async def list_conversations(workspace_id: str):
+    try:
+        await repository.get_workspace(workspace_id)
+    except KeyError as exc:
+        raise not_found(exc) from exc
+    conversations = await repository.list_conversations(workspace_id)
+    if not conversations:
+        conversations = [await repository.create_conversation(workspace_id)]
+    return {"conversations": conversations}
+
+
+@router.post("/workspaces/{workspace_id}/conversations", status_code=201)
+async def create_conversation(workspace_id: str, payload: ConversationCreate):
+    try:
+        return await repository.create_conversation(workspace_id, payload.title)
+    except KeyError as exc:
+        raise not_found(exc) from exc
+
+
+@router.patch("/conversations/{conversation_id}")
+async def update_conversation(conversation_id: str, payload: ConversationUpdate):
+    try:
+        return await repository.update_conversation(conversation_id, payload.title, payload.status)
+    except KeyError as exc:
+        raise not_found(exc) from exc
+
+
+@router.get("/conversations/{conversation_id}/runs")
+async def list_conversation_runs(conversation_id: str, limit: int = 50):
+    try:
+        await repository.get_conversation(conversation_id)
+    except KeyError as exc:
+        raise not_found(exc) from exc
+    return {"runs": await repository.list_conversation_runs(conversation_id, limit)}
+
+
 @router.post("/workspaces/{workspace_id}/runs", status_code=202)
 async def create_run(workspace_id: str, payload: RunCreate, background: BackgroundTasks):
     try:
         run = await repository.create_run(
-            workspace_id, payload.question.strip(), payload.selected_table_ids
+            workspace_id,
+            payload.question.strip(),
+            payload.selected_table_ids,
+            payload.conversation_id,
         )
     except KeyError as exc:
         raise not_found(exc) from exc
@@ -221,17 +272,47 @@ async def create_run(workspace_id: str, payload: RunCreate, background: Backgrou
         workspace_id,
         payload.question.strip(),
         payload.selected_table_ids,
+        payload.conversation_id,
     )
     return run
 
 
 @router.get("/workspaces/{workspace_id}/runs")
-async def list_runs(workspace_id: str, limit: int = 50):
+async def list_runs(workspace_id: str, limit: int = 200):
     try:
         await repository.get_workspace(workspace_id)
     except KeyError as exc:
         raise not_found(exc) from exc
     return {"runs": await repository.list_runs(workspace_id, limit)}
+
+
+@router.get("/workspaces/{workspace_id}/runs/{run_id}/download")
+async def download_run_result(workspace_id: str, run_id: str, kind: str = "result"):
+    try:
+        run = await repository.get_run(workspace_id, run_id)
+    except KeyError as exc:
+        raise not_found(exc) from exc
+    if run["status"] != "COMPLETED":
+        raise HTTPException(status_code=409, detail="运行尚未完成，暂时没有可下载结果")
+    if kind not in {"result", "analysis"}:
+        raise HTTPException(status_code=400, detail="下载类型只能是 result 或 analysis")
+    payload = run.get("payload", {})
+    data = payload.get("analysis") if kind == "analysis" else payload
+    data = data or {}
+    columns = data.get("columns", [])
+    rows = data.get("rows", [])
+    if not columns:
+        raise HTTPException(status_code=404, detail="没有可下载的表格结果")
+    stream = io.StringIO()
+    writer = csv.DictWriter(stream, fieldnames=columns, extrasaction="ignore")
+    writer.writeheader()
+    writer.writerows(rows)
+    filename = f"dataquery-{run_id[:8]}-{kind}.csv"
+    return Response(
+        content="\ufeff" + stream.getvalue(),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @router.get("/workspaces/{workspace_id}/runs/{run_id}")
@@ -279,3 +360,13 @@ async def stream_run_events(
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+@router.get("/workspaces/{workspace_id}/runs/{run_id}/events/history")
+async def get_run_event_history(workspace_id: str, run_id: str, after: int = 0):
+    """Return persisted run events for historical run inspection."""
+    try:
+        await repository.get_run(workspace_id, run_id)
+    except KeyError as exc:
+        raise not_found(exc) from exc
+    return await repository.list_events(run_id, max(after, 0))

@@ -27,8 +27,10 @@ class AgentState(TypedDict, total=False):
     workspace_id: str
     question: str
     selected_table_ids: list[str]
+    conversation_id: str | None
     catalog: list[dict]
     retrieval: dict
+    planning_retrieval: dict
     plan: QueryPlan
     normalized_sql: str
     query_result: QueryResult
@@ -80,9 +82,28 @@ def build_agent_graph(
             catalog,
             state.get("selected_table_ids"),
         )
+        recent_runs = (
+            await runtime.repository.list_conversation_runs(state["conversation_id"], limit=6)
+            if state.get("conversation_id")
+            else []
+        )
+        conversation_context = [
+            {
+                "question": run["question"],
+                "answer": str(run.get("payload", {}).get("answer", ""))[:1000],
+            }
+            for run in reversed(recent_runs)
+            if run["status"] == "COMPLETED"
+            and run.get("payload", {}).get("answer")
+            and (
+                run.get("payload", {}).get("sql")
+                or run.get("payload", {}).get("analysis")
+            )
+        ][-3:]
         return {
             "catalog": catalog,
             "retrieval": retrieval,
+            "planning_retrieval": {**retrieval, "conversation_context": conversation_context},
             "warnings": list(retrieval.get("warnings", [])),
         }
 
@@ -92,15 +113,22 @@ def build_agent_graph(
             return {}
         try:
             query_plan = await runtime.provider.plan(
-                state["question"], selected_catalog(state), state["retrieval"]
+                state["question"], selected_catalog(state), state["planning_retrieval"]
             )
         except (ValidationError, ValueError) as exc:
-            query_plan = await runtime.provider.plan(
-                state["question"],
-                selected_catalog(state),
-                state["retrieval"],
-                validation_error=f"The previous plan was invalid: {str(exc)[:500]}",
-            )
+            try:
+                query_plan = await runtime.provider.plan(
+                    state["question"],
+                    selected_catalog(state),
+                    state["planning_retrieval"],
+                    validation_error=f"The previous plan was invalid: {str(exc)[:500]}",
+                )
+            except (ValidationError, ValueError) as repair_error:
+                if "chart" in str(repair_error).lower() and "at most" in str(repair_error).lower():
+                    return {
+                        "error": "当前图表请求包含过多指标，请减少雨量站数量或分两次提问。"
+                    }
+                return {"error": "查询计划格式无效，请缩小问题范围后重试。"}
             return {"plan": query_plan, "planning_attempts": 2}
         return {"plan": query_plan, "planning_attempts": 1}
 
@@ -124,7 +152,11 @@ def build_agent_graph(
                 }
                 for table in tables
             }
-            guarded = runtime.guard.validate(query_plan.sql, schema)
+            guarded = runtime.guard.validate(
+                query_plan.sql,
+                schema,
+                max_rows=100_000_000 if query_plan.task == "analysis" else 500,
+            )
             if guarded.allowed:
                 return {"normalized_sql": guarded.normalized_sql}
             reason = guarded.reason or "SQL validation failed"
@@ -133,7 +165,7 @@ def build_agent_graph(
         repaired = await runtime.provider.plan(
             state["question"],
             selected_catalog(state),
-            state["retrieval"],
+            state["planning_retrieval"],
             validation_error=reason,
         )
         return {"plan": repaired, "planning_attempts": 2}
@@ -142,7 +174,11 @@ def build_agent_graph(
         await emit("querying")
         if state.get("error") or not state.get("normalized_sql"):
             return {}
-        max_rows = 100_000 if state["plan"].task == "analysis" else 500
+        max_rows = 100_000_000 if state["plan"].task == "analysis" else 500
+        if state["plan"].task == "analysis":
+            await runtime.executor.count_rows(
+                state["workspace_id"], state["normalized_sql"], max_rows=max_rows
+            )
         result = await runtime.executor.execute(
             state["workspace_id"], state["normalized_sql"], max_rows=max_rows
         )
@@ -203,7 +239,7 @@ def build_agent_graph(
         warnings = (
             []
             if validate_answer(draft, state["evidence"])
-            else ["Answer evidence validation failed; a deterministic evidence fallback was used."]
+            else ["回答模型生成的数字未能通过证据校验，系统已改用后端计算结果生成回答。"]
         )
         return {"answer": answer, "warnings": warnings}
 
@@ -241,6 +277,7 @@ async def run_agent(
     workspace_id: str,
     question: str,
     selected_table_ids: list[str] | None = None,
+    conversation_id: str | None = None,
     on_phase: Callable[[str], Awaitable[None]] | None = None,
 ) -> dict[str, Any]:
     graph = build_agent_graph(runtime, on_phase)
@@ -249,6 +286,7 @@ async def run_agent(
             "workspace_id": workspace_id,
             "question": question,
             "selected_table_ids": selected_table_ids or [],
+            "conversation_id": conversation_id,
         }
     )
     return state

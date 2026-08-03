@@ -28,6 +28,20 @@ def test_grounding_rejects_unsupported_numbers_and_evidence() -> None:
     assert not validate_answer(unknown, EVIDENCE)
 
 
+def test_grounding_accepts_rounded_decimals_but_not_wrong_integers() -> None:
+    evidence = [{"id": "A0", "fact": '{"score": 0.9553753017, "pairs": 4900}'}]
+    rounded = AnswerDraft(
+        summary="分数为 0.9554。",
+        findings=[GroundedFinding(text="使用了 4900 个样本对。", evidence_ids=["A0"])],
+    )
+    wrong_count = AnswerDraft(
+        summary="分数为 0.9554。",
+        findings=[GroundedFinding(text="使用了 4901 个样本对。", evidence_ids=["A0"])],
+    )
+    assert validate_answer(rounded, evidence)
+    assert not validate_answer(wrong_count, evidence)
+
+
 def test_render_answer_deduplicates_summary_and_finding() -> None:
     draft = AnswerDraft(
         summary="East total is 120.5.",
