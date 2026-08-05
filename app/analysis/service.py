@@ -13,8 +13,8 @@ class AnalysisError(ValueError):
     pass
 
 
-def records(frame: pd.DataFrame, limit: int = 500) -> list[dict[str, Any]]:
-    return frame.head(limit).replace({np.nan: None}).to_dict(orient="records")
+def records(frame: pd.DataFrame) -> list[dict[str, Any]]:
+    return frame.replace({np.nan: None}).to_dict(orient="records")
 
 
 class AnalysisService:
@@ -70,7 +70,7 @@ class AnalysisService:
             return f"Pearson r({spec.columns[0]}, {spec.columns[1]})"
         if spec.operation == "nse":
             return (
-                f"NSE = 1 - sum(({spec.columns[1]} - mean({spec.columns[0]}))^2) / "
+                f"NSE = 1 - sum(({spec.columns[1]} - {spec.columns[0]})^2) / "
                 f"sum(({spec.columns[0]} - mean({spec.columns[0]}))^2)"
             )
         if spec.operation == "kge":
@@ -135,12 +135,15 @@ class AnalysisService:
     def _group_aggregate(self, frame: pd.DataFrame, spec: AnalysisSpec) -> AnalysisResult:
         if not spec.group_by or not spec.columns:
             raise AnalysisError("group_aggregate requires group_by and metric columns")
-        self.require_columns(frame, [*spec.group_by, *spec.columns])
-        working = frame[[*spec.group_by, *spec.columns]].copy()
-        for column in spec.columns:
+        metric_columns = [column for column in spec.columns if column not in spec.group_by]
+        if not metric_columns:
+            raise AnalysisError("group_aggregate requires a metric outside the group fields")
+        self.require_columns(frame, [*spec.group_by, *metric_columns])
+        working = frame[[*spec.group_by, *metric_columns]].copy()
+        for column in metric_columns:
             working[column] = pd.to_numeric(working[column], errors="coerce")
         output = (
-            working.groupby(spec.group_by, dropna=False)[spec.columns]
+            working.groupby(spec.group_by, dropna=False)[metric_columns]
             .agg(spec.aggregation)
             .reset_index()
         )

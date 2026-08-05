@@ -49,6 +49,16 @@ Planning rules:
   over SQL results. A monthly SUM with a line chart is task=query, not task=analysis.
 - Use task=analysis only for a requested Pandas operation after SQL. Its analysis columns must
   exactly match the SQL output column names, not the source column names.
+- Honor an explicitly requested execution layer. If the user explicitly asks Pandas to group
+  data, use task=analysis with operation=group_aggregate. SQL must return the unaggregated group
+  keys and metric values for every row in the requested range; do not pre-aggregate in SQL and
+  then describe the smaller result. Put only grouping keys in group_by and only numeric metrics
+  in columns. A derived key such as year may be selected per row with an alias and used in
+  group_by.
+- If the user explicitly requests a safe/custom/general formula and supplies an expression, use
+  task=analysis with operation=formula and preserve that expression in custom_formula. Do not
+  replace it with SQL arithmetic or a different built-in analysis operation, even when the
+  numerical result would be similar.
 - For task=analysis, use exactly one allowlisted operation: describe (descriptive statistics),
   group_aggregate (Pandas group-by), correlation (exactly two numeric fields, Pearson r), trend
   (one time field and one numeric field), outlier_iqr (one numeric field), nse (exactly two
@@ -87,6 +97,9 @@ Return exactly one JSON object with every field below. Do not use an `answer` fi
 }
 Every numeric statement must be supported by the supplied evidence. Findings must cite one or
 more evidence_ids containing the stated number. Use [] or "" when a section is not applicable.
+Return no more than 8 findings, 8 evidence_ids per finding, 5 limitations,
+5 recommendations, and 5 caveats. E1 through E20 are an evidence sample, not proof that the
+complete query returned exactly 20 rows; use E0 for preview scope.
 For task=analysis, provide several distinct findings, explain the metric and formula in
 interpretation, mention sample size or method limitations, and give practical next steps.
 Do not repeat the summary verbatim in findings or interpretation. Do not mention a number
@@ -106,6 +119,31 @@ class AnswerDraft(BaseModel):
     limitations: list[str] = Field(default_factory=list, max_length=5)
     recommendations: list[str] = Field(default_factory=list, max_length=5)
     caveats: list[str] = Field(default_factory=list, max_length=5)
+
+
+def normalize_answer_payload(payload: dict) -> dict:
+    normalized = dict(payload)
+    for field, limit in {
+        "findings": 8,
+        "limitations": 5,
+        "recommendations": 5,
+        "caveats": 5,
+    }.items():
+        values = normalized.get(field)
+        if isinstance(values, list):
+            normalized[field] = values[:limit]
+    findings = normalized.get("findings")
+    if isinstance(findings, list):
+        normalized["findings"] = [
+            {
+                **finding,
+                "evidence_ids": finding.get("evidence_ids", [])[:8],
+            }
+            if isinstance(finding, dict)
+            else finding
+            for finding in findings
+        ]
+    return normalized
 
 
 class AgentProvider(Protocol):
@@ -303,4 +341,5 @@ class OpenAICompatibleProvider:
             {"question": question, "task": plan.task, "evidence": evidence},
             ensure_ascii=False,
         )
-        return AnswerDraft.model_validate(await self._json_completion(system, user))
+        payload = await self._json_completion(system, user)
+        return AnswerDraft.model_validate(normalize_answer_payload(payload))

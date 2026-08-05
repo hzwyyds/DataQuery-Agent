@@ -17,6 +17,16 @@ def test_guard_qualifies_columns_and_caps_limit() -> None:
     assert "orders.region" in result.normalized_sql
 
 
+def test_guard_can_preserve_full_query_for_separate_preview_execution() -> None:
+    result = SQLGuard().validate(
+        "SELECT region, amount FROM orders ORDER BY amount DESC",
+        SCHEMA,
+        apply_limit=False,
+    )
+    assert result.allowed
+    assert "LIMIT" not in result.normalized_sql
+
+
 def test_guard_rejects_expression_limit_and_external_scan() -> None:
     expression = SQLGuard().validate("SELECT * FROM orders LIMIT 400 + 200", SCHEMA)
     external = SQLGuard().validate("SELECT * FROM read_csv_auto('secret.csv')", SCHEMA)

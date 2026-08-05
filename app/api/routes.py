@@ -28,6 +28,7 @@ from app.core.config import settings
 from app.data.ingestion import SUPPORTED_SUFFIXES, IngestionService
 from app.data.repository import repository
 from app.data.storage import WorkspaceStorage, safe_filename
+from app.query.contracts import AnalysisSpec
 from app.query.executor import DuckDBQueryExecutor
 from app.query.sql_guard import SQLGuard
 from app.rag.service import RAGService
@@ -297,17 +298,32 @@ async def download_run_result(workspace_id: str, run_id: str, kind: str = "resul
     if kind not in {"result", "analysis"}:
         raise HTTPException(status_code=400, detail="下载类型只能是 result 或 analysis")
     payload = run.get("payload", {})
-    data = payload.get("analysis") if kind == "analysis" else payload
-    data = data or {}
-    columns = data.get("columns", [])
-    rows = data.get("rows", [])
-    if not columns:
-        raise HTTPException(status_code=404, detail="没有可下载的表格结果")
+    sql = payload.get("sql")
+    filename = f"dataquery-{run_id[:8]}-{kind}.csv"
+    if not sql:
+        raise HTTPException(status_code=404, detail="没有可下载的查询结果")
+    executor = DuckDBQueryExecutor(storage)
+    if kind == "result":
+        return StreamingResponse(
+            executor.stream_csv(workspace_id, sql),
+            media_type="text/csv; charset=utf-8",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+    spec_payload = payload.get("analysis_spec")
+    if not spec_payload:
+        raise HTTPException(status_code=404, detail="该历史运行没有可重算的分析定义")
+    full_rows = await executor.count_rows(workspace_id, sql, max_rows=100_000_000)
+    result = await executor.execute(workspace_id, sql, max_rows=full_rows)
+    analysis = AnalysisService().run(AnalysisSpec.model_validate(spec_payload), result)
+    if analysis.rows:
+        columns, rows = analysis.columns, analysis.rows
+    else:
+        columns = ["metric", "value"]
+        rows = [{"metric": key, "value": value} for key, value in analysis.metrics.items()]
     stream = io.StringIO()
     writer = csv.DictWriter(stream, fieldnames=columns, extrasaction="ignore")
     writer.writeheader()
     writer.writerows(rows)
-    filename = f"dataquery-{run_id[:8]}-{kind}.csv"
     return Response(
         content="\ufeff" + stream.getvalue(),
         media_type="text/csv; charset=utf-8",

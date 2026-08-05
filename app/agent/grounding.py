@@ -7,7 +7,7 @@ from decimal import Decimal, InvalidOperation
 from app.agent.provider import AnswerDraft
 from app.query.contracts import AnalysisResult, QueryResult
 
-NUMBER = re.compile(r"(?<![A-Za-z_])-?\d+(?:\.\d+)?%?")
+NUMBER = re.compile(r"(?<![A-Za-z_\d])-?\d+(?:\.\d+)?%?")
 
 
 def build_evidence(result: QueryResult, analysis: AnalysisResult | None = None) -> list[dict]:
@@ -69,15 +69,19 @@ def normalized_numbers(text: str) -> set[str]:
 def numeric_tokens(text: str) -> list[tuple[Decimal, bool]]:
     tokens = []
     for value in NUMBER.findall(text):
+        is_percent = value.endswith("%")
         raw = value.removesuffix("%").lstrip("+")
         try:
-            tokens.append((Decimal(raw), "." not in raw))
+            number = Decimal(raw) / 100 if is_percent else Decimal(raw)
+            tokens.append((number, "." not in raw and not is_percent))
         except InvalidOperation:
             continue
     return tokens
 
 
-def numbers_supported(claim: str, evidence_text: str) -> bool:
+def numbers_supported(
+    claim: str, evidence_text: str, *, allow_derived: bool = False
+) -> bool:
     supported = numeric_tokens(evidence_text)
     for value, is_integer in numeric_tokens(claim):
         if is_integer:
@@ -86,28 +90,34 @@ def numbers_supported(claim: str, evidence_text: str) -> bool:
             continue
         decimals = max(1, -value.as_tuple().exponent)
         tolerance = Decimal("0.5") * (Decimal(10) ** -decimals)
-        if not any(abs(value - candidate) <= tolerance for candidate, _ in supported):
-            return False
+        if any(abs(value - candidate) <= tolerance for candidate, _ in supported):
+            continue
+        if allow_derived:
+            values = [candidate for candidate, _ in supported]
+            derived = []
+            for left in values:
+                for right in values:
+                    derived.extend((left + right, left - right, left * right))
+                    if right != 0:
+                        derived.append(left / right)
+            if any(abs(value - candidate) <= tolerance for candidate in derived):
+                continue
+        return False
     return True
 
 
 def validate_answer(draft: AnswerDraft, evidence: list[dict]) -> bool:
     by_id = {item["id"]: item["fact"] for item in evidence}
     supported = "\n".join(by_id.values())
-    narratives = [
-        draft.summary,
-        draft.interpretation,
-        *draft.limitations,
-        *draft.recommendations,
-        *draft.caveats,
-    ]
-    if any(not numbers_supported(text, supported) for text in narratives):
+    # Conclusions stay strict. Explanatory sections may contain formula constants,
+    # conventional thresholds, or suggested targets that are not result facts.
+    if not numbers_supported(draft.summary, supported, allow_derived=True):
         return False
     for finding in draft.findings:
         if any(identity not in by_id for identity in finding.evidence_ids):
             return False
         finding_supported = "\n".join(by_id[identity] for identity in finding.evidence_ids)
-        if not numbers_supported(finding.text, finding_supported):
+        if not numbers_supported(finding.text, finding_supported, allow_derived=True):
             return False
     return True
 

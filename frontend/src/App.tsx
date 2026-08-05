@@ -228,56 +228,6 @@ function AnalysisView({ analysis }: { analysis: NonNullable<RunPayload["analysis
   );
 }
 
-function ConversationThread({
-  runs,
-  activeRunId,
-  onSelect,
-}: {
-  runs: Run[];
-  activeRunId?: string;
-  onSelect: (runId: string) => void;
-}) {
-  if (!runs.length) {
-    return <div className="result-placeholder"><Search size={24} /><span>在这个会话中提出第一个问题。</span></div>;
-  }
-  return (
-    <div className="conversation-thread" aria-label="当前会话">
-      {runs.map((run) => (
-        <article
-          className={run.id === activeRunId ? "chat-turn active" : "chat-turn"}
-          key={run.id}
-          onClick={() => onSelect(run.id)}
-        >
-          <div className="chat-message user-message">
-            <small>你</small>
-            <p>{run.question}</p>
-          </div>
-          <div className="chat-message agent-message">
-            <small>DataQuery Agent</small>
-            {run.status === "FAILED" ? (
-              <p>{run.error_message || "本轮运行失败。"}</p>
-            ) : run.status === "RUNNING" ? (
-              <p>正在检索、规划并计算…</p>
-            ) : (
-              <>
-                <MarkdownText>{run.payload.answer || "本轮未生成回答。"}</MarkdownText>
-                {(run.payload.warnings ?? []).map((warning) => (
-                  <div className="warning-row" key={warning}><AlertTriangle size={14} />{warning}</div>
-                ))}
-                {run.payload.chart && (
-                  <Suspense fallback={<div className="chart-loading">正在加载图表…</div>}>
-                    <ChartView chart={run.payload.chart} />
-                  </Suspense>
-                )}
-              </>
-            )}
-          </div>
-        </article>
-      ))}
-    </div>
-  );
-}
-
 export function App() {
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
   const [workspaceId, setWorkspaceId] = useState("");
@@ -300,10 +250,6 @@ export function App() {
   const fileInput = useRef<HTMLInputElement>(null);
 
   const workspace = workspaces.find((item) => item.id === workspaceId);
-  const conversationRuns = runs
-    .filter((run) => !conversationId || run.conversation_id === conversationId)
-    .sort((left, right) => left.created_at.localeCompare(right.created_at));
-
   const loadWorkspaces = useCallback(async () => {
     const items = await api.workspaces();
     setWorkspaces(items);
@@ -693,13 +639,7 @@ export function App() {
                     )}
                   </div>
 
-                  {isAnswerTab(tab) ? (
-                    <ConversationThread
-                      runs={conversationRuns}
-                      activeRunId={activeRun?.id}
-                      onSelect={(runId) => { selectRun(runId).catch((cause: Error) => setError(cause.message)); }}
-                    />
-                  ) : !activeRun ? (
+                  {!activeRun ? (
                     <div className="result-placeholder"><Search size={24} /><span>查询、分析、图表和证据会显示在这里。</span></div>
                   ) : activeRun.status === "FAILED" ? (
                     <div className="run-error"><AlertTriangle size={22} /><strong>{activeRun.error_code}</strong><span>{activeRun.error_message}</span></div>

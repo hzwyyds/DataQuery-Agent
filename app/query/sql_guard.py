@@ -33,6 +33,7 @@ class SQLGuard:
         schema: dict[str, dict[str, str]],
         *,
         max_rows: int = 500,
+        apply_limit: bool = True,
     ) -> GuardResult:
         if not sql or not sql.strip():
             return GuardResult(False, reason="SQL is empty")
@@ -77,8 +78,9 @@ class SQLGuard:
             requested = int(expression.this)
             if requested < 0:
                 return GuardResult(False, reason="LIMIT cannot be negative")
-            limit.set("expression", exp.Literal.number(min(requested, max_rows + 1)))
-        else:
+            if apply_limit:
+                limit.set("expression", exp.Literal.number(min(requested, max_rows + 1)))
+        elif apply_limit:
             root = root.limit(max_rows + 1)
         try:
             qualified = qualify(

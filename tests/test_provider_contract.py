@@ -1,6 +1,11 @@
 from __future__ import annotations
 
-from app.agent.provider import ANSWER_DRAFT_CONTRACT, QUERY_PLAN_CONTRACT, OpenAICompatibleProvider
+from app.agent.provider import (
+    ANSWER_DRAFT_CONTRACT,
+    QUERY_PLAN_CONTRACT,
+    OpenAICompatibleProvider,
+    normalize_answer_payload,
+)
 from app.query.contracts import QueryPlan
 
 
@@ -17,6 +22,8 @@ def test_query_plan_contract_spells_out_allowed_values() -> None:
     assert "Never output" in QUERY_PLAN_CONTRACT
     assert "Python code." in QUERY_PLAN_CONTRACT
     assert "in the same language as" in QUERY_PLAN_CONTRACT
+    assert "do not pre-aggregate in SQL" in QUERY_PLAN_CONTRACT
+    assert "preserve that expression in custom_formula" in QUERY_PLAN_CONTRACT
 
 
 def test_answer_contract_rejects_unstructured_answer_key() -> None:
@@ -27,6 +34,25 @@ def test_answer_contract_rejects_unstructured_answer_key() -> None:
     assert '"limitations"' in ANSWER_DRAFT_CONTRACT
     assert '"recommendations"' in ANSWER_DRAFT_CONTRACT
     assert "Do not repeat the summary verbatim" in ANSWER_DRAFT_CONTRACT
+    assert "no more than 8 findings" in ANSWER_DRAFT_CONTRACT
+
+
+def test_answer_payload_truncates_oversized_model_lists() -> None:
+    payload = {
+        "summary": "summary",
+        "findings": [
+            {
+                "text": f"finding {index}",
+                "evidence_ids": [f"E{evidence}" for evidence in range(20)],
+            }
+            for index in range(20)
+        ],
+        "limitations": [str(index) for index in range(8)],
+    }
+    normalized = normalize_answer_payload(payload)
+    assert len(normalized["findings"]) == 8
+    assert len(normalized["findings"][0]["evidence_ids"]) == 8
+    assert len(normalized["limitations"]) == 5
 
 
 def test_explicit_hydrology_pair_repairs_over_conservative_clarification() -> None:

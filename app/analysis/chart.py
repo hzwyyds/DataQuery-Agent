@@ -17,7 +17,9 @@ def is_number(value: Any) -> bool:
 class ChartService:
     max_points = 500
 
-    def build(self, spec: ChartSpec | None, rows: list[dict]) -> ChartResult | None:
+    def build(
+        self, spec: ChartSpec | None, rows: list[dict], *, source_points: int | None = None
+    ) -> ChartResult | None:
         if spec is None:
             return None
         if not rows:
@@ -35,12 +37,12 @@ class ChartService:
             x_values = [row.get(spec.x) for row in rows if row.get(spec.x) is not None]
             if not x_values or not all(is_number(value) for value in x_values):
                 raise ChartError("scatter charts require a numeric x field")
-        source_points = len(rows)
-        if source_points <= self.max_points:
+        total_points = source_points if source_points is not None else len(rows)
+        if len(rows) <= self.max_points:
             data = rows
         else:
             indexes = [
-                round(index * (source_points - 1) / (self.max_points - 1))
+                round(index * (len(rows) - 1) / (self.max_points - 1))
                 for index in range(self.max_points)
             ]
             data = [rows[index] for index in indexes]
@@ -50,7 +52,7 @@ class ChartService:
             y=spec.y,
             series=spec.series,
             data=data,
-            source_points=source_points,
+            source_points=total_points,
             displayed_points=len(data),
-            downsampled=source_points > self.max_points,
+            downsampled=total_points > len(data),
         )

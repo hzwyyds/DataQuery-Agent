@@ -4,7 +4,7 @@ from uuid import uuid4
 
 import pytest
 
-from app.agent.graph import AgentRuntime, run_agent
+from app.agent.graph import AgentRuntime, analysis_plan_error, run_agent
 from app.agent.provider import AnswerDraft, GroundedFinding
 from app.analysis.chart import ChartService
 from app.analysis.service import AnalysisService
@@ -107,9 +107,7 @@ def test_agent_runs_guarded_query_and_repairs_invalid_plan(tmp_path: Path) -> No
         assert fallback["answer"].startswith("查询返回 2 行预览结果。")
         assert '"region": "East"' in fallback["answer"]
         assert '"total": 120' in fallback["answer"]
-        assert fallback["warnings"] == [
-            "Answer model output was invalid; a deterministic evidence fallback was used."
-        ]
+        assert fallback["warnings"] == []
 
     asyncio.run(run())
 
@@ -154,3 +152,29 @@ def test_agent_runs_structured_pandas_analysis(tmp_path: Path) -> None:
         assert result["analysis_result"].input_rows == 3
 
     asyncio.run(run())
+
+
+def test_analysis_plan_validation_rejects_wrong_fixed_arity() -> None:
+    invalid_trend = QueryPlan(
+        task="analysis",
+        table_ids=["table-1"],
+        sql="SELECT date, value, month FROM measurements",
+        analysis=AnalysisSpec(
+            operation="trend", columns=["date", "value", "month"]
+        ),
+    )
+    invalid_formula = QueryPlan(
+        task="analysis",
+        table_ids=["table-1"],
+        sql="SELECT value FROM measurements",
+        analysis=AnalysisSpec(operation="formula", columns=["value"]),
+    )
+    valid_trend = invalid_trend.model_copy(
+        update={
+            "analysis": AnalysisSpec(operation="trend", columns=["date", "value"])
+        }
+    )
+
+    assert analysis_plan_error(invalid_trend) == "trend requires exactly 2 analysis columns"
+    assert analysis_plan_error(invalid_formula) == "formula analysis requires custom_formula"
+    assert analysis_plan_error(valid_trend) is None

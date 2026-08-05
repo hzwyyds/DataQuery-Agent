@@ -146,6 +146,16 @@ def test_chinese_xlsx_upload_and_run_download(tmp_path: Path, monkeypatch) -> No
                 run["id"], {"columns": ["流量"], "rows": [{"流量": 10}]}
             )
         )
+        asyncio.run(
+            repository.complete_run(
+                run["id"],
+                {
+                    "sql": f'SELECT * FROM "{table[0]["physical_name"]}" ORDER BY 1',
+                    "columns": [],
+                    "rows": [],
+                },
+            )
+        )
         downloaded = client.get(
             f"/api/v1/workspaces/{workspace['id']}/runs/{run['id']}/download"
         )

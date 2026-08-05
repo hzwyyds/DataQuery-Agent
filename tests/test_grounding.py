@@ -72,6 +72,59 @@ def test_grounding_rejects_unsupported_numbers_in_analysis_narrative() -> None:
     assert not validate_answer(draft, EVIDENCE)
 
 
+def test_grounding_allows_explanatory_constants_when_conclusion_is_grounded() -> None:
+    draft = AnswerDraft(
+        summary="East total is 120.5.",
+        interpretation="A conventional threshold such as 0 may be explained here.",
+    )
+    assert validate_answer(draft, EVIDENCE)
+
+
+def test_grounding_accepts_ratio_rendered_as_percentage() -> None:
+    evidence = [{"id": "A0", "fact": '{"ratio": 0.95}'}]
+    draft = AnswerDraft(summary="The completion rate is 95%.")
+    assert validate_answer(draft, evidence)
+
+
+def test_grounding_accepts_one_step_decimal_derivations_in_cited_findings() -> None:
+    evidence = [
+        {
+            "id": "A1",
+            "fact": '{"max": 6529.75, "min": 240.208333, "mean": 1365.768995, '
+            '"std": 1128.792679}',
+        }
+    ]
+    draft = AnswerDraft(
+        summary="流量离散程度较高。",
+        findings=[
+            GroundedFinding(text="极差为 6289.54。", evidence_ids=["A1"]),
+            GroundedFinding(text="变异系数约为 82.6%。", evidence_ids=["A1"]),
+        ],
+    )
+    unsupported = AnswerDraft(
+        summary="流量离散程度较高。",
+        findings=[GroundedFinding(text="派生值为 777.77。", evidence_ids=["A1"])],
+    )
+
+    assert validate_answer(draft, evidence)
+    assert not validate_answer(unsupported, evidence)
+
+
+def test_grounding_reads_iso_date_parts_as_positive_numbers() -> None:
+    evidence = [
+        {"id": "E1", "fact": '{"日期": "2011-01-02T00:00:00", "流量": 451.5}'}
+    ]
+    draft = AnswerDraft(
+        summary="首条证据日期为 2011 年 1 月 2 日。",
+        findings=[
+            GroundedFinding(
+                text="2011 年 1 月 2 日的流量为 451.5。", evidence_ids=["E1"]
+            )
+        ],
+    )
+    assert validate_answer(draft, evidence)
+
+
 def test_analysis_fallback_contains_formula_interpretation_and_limits() -> None:
     answer = fallback_analysis_answer(
         AnalysisResult(

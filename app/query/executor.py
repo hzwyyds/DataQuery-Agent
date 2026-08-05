@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import csv
+import io
 from decimal import Decimal
 from typing import Any
 
@@ -107,6 +109,73 @@ class DuckDBQueryExecutor:
                 "当前分析需要读取超过 1 亿行，已停止执行；请先按时间、区域或指标筛选，或先聚合"
             )
         return count
+
+    async def execute_chart(
+        self,
+        workspace_id: str,
+        sql: str,
+        *,
+        max_points: int = 500,
+        max_rows: int = 100_000_000,
+    ) -> tuple[QueryResult, int]:
+        source_points = await self.count_rows(workspace_id, sql, max_rows=max_rows)
+        if source_points <= max_points:
+            return (
+                await self.execute(workspace_id, sql, max_rows=max_points),
+                source_points,
+            )
+        sampled_sql = f"""
+        WITH dataquery_source AS ({sql.rstrip(";")}),
+        dataquery_numbered AS (
+            SELECT *,
+                   ROW_NUMBER() OVER () AS __dataquery_row,
+                   COUNT(*) OVER () AS __dataquery_total
+            FROM dataquery_source
+        ),
+        dataquery_bucketed AS (
+            SELECT *,
+                   FLOOR((__dataquery_row - 1) * {max_points} / __dataquery_total)
+                       AS __dataquery_bucket
+            FROM dataquery_numbered
+        ),
+        dataquery_sampled AS (
+            SELECT *,
+                   ROW_NUMBER() OVER (
+                       PARTITION BY __dataquery_bucket ORDER BY __dataquery_row
+                   ) AS __dataquery_bucket_row
+            FROM dataquery_bucketed
+        )
+        SELECT * EXCLUDE (
+            __dataquery_row,
+            __dataquery_total,
+            __dataquery_bucket,
+            __dataquery_bucket_row
+        )
+        FROM dataquery_sampled
+        WHERE __dataquery_bucket_row = 1
+        ORDER BY __dataquery_row
+        """
+        sampled = await self.execute(workspace_id, sampled_sql, max_rows=max_points)
+        return sampled, source_points
+
+    def stream_csv(self, workspace_id: str, sql: str, batch_size: int = 10_000):
+        connection = self.connect(workspace_id)
+        try:
+            cursor = connection.execute(sql)
+            columns = [item[0] for item in cursor.description]
+            header = io.StringIO()
+            csv.writer(header).writerow(columns)
+            yield "\ufeff" + header.getvalue()
+            while rows := cursor.fetchmany(batch_size):
+                stream = io.StringIO()
+                writer = csv.writer(stream)
+                writer.writerows(
+                    [json_value(value) for value in row]
+                    for row in rows
+                )
+                yield stream.getvalue()
+        finally:
+            connection.close()
 
     async def explain(self, workspace_id: str, sql: str) -> list[list[str]]:
         connection = self.connect(workspace_id)

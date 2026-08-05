@@ -24,6 +24,12 @@ PHASE_MESSAGES = {
 def result_payload(state: dict[str, Any]) -> dict:
     query_result = state.get("query_result")
     plan = state.get("plan")
+    analysis_result = state.get("analysis_result")
+    analysis_preview = (
+        analysis_result.model_copy(update={"rows": analysis_result.rows[:100]})
+        if analysis_result
+        else None
+    )
     return jsonable_encoder(
         {
             "answer": state.get("answer", ""),
@@ -31,7 +37,8 @@ def result_payload(state: dict[str, Any]) -> dict:
             "columns": query_result.columns if query_result else [],
             "rows": query_result.rows if query_result else [],
             "retrieval": state.get("retrieval", {"mode": "NONE", "matches": []}),
-            "analysis": state.get("analysis_result"),
+            "analysis": analysis_preview,
+            "analysis_spec": plan.analysis if plan else None,
             "evidence": state.get("evidence", []),
             "chart": state.get("chart"),
             "scope": query_result.scope if query_result else None,
@@ -69,17 +76,6 @@ async def execute_run(
                 "failed",
                 state["error"],
                 {"error_code": "AGENT_ERROR", "message": state["error"]},
-                level="error",
-            )
-            return
-            await repository.fail_run(
-                run_id, "AGENT_ERROR", "分析计划无法完成，请调整问题或字段范围"
-            )
-            await repository.append_event(
-                run_id,
-                "failed",
-                "运行失败",
-                {"error_code": "AGENT_ERROR"},
                 level="error",
             )
             return

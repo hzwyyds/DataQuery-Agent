@@ -111,6 +111,28 @@ def test_analysis_plan_normalizes_optional_null_fields_from_llm() -> None:
     assert spec.aggregation == "mean"
 
 
+def test_group_aggregate_ignores_group_keys_repeated_as_metrics() -> None:
+    result = query_result(
+        [
+            {"月份": 1, "流量": 10},
+            {"月份": 1, "流量": 20},
+            {"月份": 2, "流量": 30},
+        ]
+    )
+    analysis = AnalysisService().run(
+        AnalysisSpec(
+            operation="group_aggregate",
+            group_by=["月份"],
+            columns=["月份", "流量"],
+            aggregation="mean",
+        ),
+        result,
+    )
+
+    assert analysis.columns == ["月份", "流量"]
+    assert analysis.rows == [{"月份": 1, "流量": 15.0}, {"月份": 2, "流量": 30.0}]
+
+
 def test_outlier_iqr_returns_only_outlying_rows() -> None:
     rows = [{"order": index, "amount": value} for index, value in enumerate([1, 2, 2, 3, 100])]
     analysis = AnalysisService().run(
