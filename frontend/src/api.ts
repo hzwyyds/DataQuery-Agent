@@ -1,7 +1,6 @@
 import type {
   CatalogColumn,
   CatalogTable,
-  Conversation,
   RagStatus,
   Run,
   RunEvent,
@@ -36,13 +35,11 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name }),
     }),
-  conversations: (workspaceId: string) =>
-    request<{ conversations: Conversation[] }>("/api/v1/workspaces/" + workspaceId + "/conversations"),
-  createConversation: (workspaceId: string, title = "新会话") =>
-    request<Conversation>("/api/v1/workspaces/" + workspaceId + "/conversations", {
-      method: "POST",
+  updateWorkspace: (workspaceId: string, name: string) =>
+    request<Workspace>(`/api/v1/workspaces/${workspaceId}`, {
+      method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ title }),
+      body: JSON.stringify({ name }),
     }),
   sources: (workspaceId: string) =>
     request<Source[]>(`/api/v1/workspaces/${workspaceId}/sources`),
@@ -78,14 +75,14 @@ export const api = {
     request<RagStatus>(`/api/v1/workspaces/${workspaceId}/rag/status`),
   reindex: (workspaceId: string) =>
     request(`/api/v1/workspaces/${workspaceId}/rag/reindex`, { method: "POST" }),
-  createRun: (workspaceId: string, question: string, selectedTableIds: string[], conversationId?: string) =>
+  createRun: (workspaceId: string, question: string, selectedTableIds: string[]) =>
     request<Run>(`/api/v1/workspaces/${workspaceId}/runs`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ question, selected_table_ids: selectedTableIds, conversation_id: conversationId }),
+      body: JSON.stringify({ question, selected_table_ids: selectedTableIds }),
     }),
   runs: (workspaceId: string) =>
-    request<{ runs: Run[] }>(`/api/v1/workspaces/${workspaceId}/runs?limit=200`),
+    request<{ runs: Run[] }>(`/api/v1/workspaces/${workspaceId}/runs?limit=500`),
   run: (workspaceId: string, runId: string) =>
     request<Run>(`/api/v1/workspaces/${workspaceId}/runs/${runId}`),
   events: (workspaceId: string, runId: string) =>

@@ -163,13 +163,12 @@ def test_chart_accepts_twelve_requested_series() -> None:
     assert len(chart.y) == 12
 
 
-def test_chart_downsamples_to_500_points_and_discloses_scope() -> None:
+def test_chart_keeps_every_point_in_the_requested_scope() -> None:
     rows = [{"index": index, "value": index * 2} for index in range(700)]
     chart = ChartService().build(ChartSpec(type="scatter", x="index", y=["value"]), rows)
 
     assert chart is not None
     assert chart.source_points == 700
-    assert chart.displayed_points == 500
-    assert chart.downsampled is True
-    assert chart.data[0] == rows[0]
-    assert chart.data[-1] == rows[-1]
+    assert chart.displayed_points == 700
+    assert chart.downsampled is False
+    assert chart.data == rows

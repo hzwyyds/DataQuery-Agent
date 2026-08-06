@@ -28,9 +28,11 @@ class FakeProvider:
         self.analysis = analysis
         self.malformed_answer = False
         self.plan_calls = 0
+        self.last_retrieval = None
 
     async def plan(self, _question, _catalog, _retrieval, validation_error=None):
         self.plan_calls += 1
+        self.last_retrieval = _retrieval
         if self.repair and validation_error is None:
             return QueryPlan(task="query", table_ids=["outside"], sql="SELECT * FROM missing")
         if self.analysis:
@@ -86,6 +88,13 @@ def test_agent_runs_guarded_query_and_repairs_invalid_plan(tmp_path: Path) -> No
             workspace["id"], source_id, csv_path, csv_path.name
         )
         table = (await repository.catalog(workspace["id"]))[0]
+        for index in range(6):
+            previous = await repository.create_run(
+                workspace["id"], f"Previous question {index + 1}", []
+            )
+            await repository.complete_run(
+                previous["id"], {"answer": f"Previous answer {index + 1}"}
+            )
         provider = FakeProvider(table["id"], table["physical_name"], repair=True)
         runtime = AgentRuntime(
             repository=repository,
@@ -101,6 +110,13 @@ def test_agent_runs_guarded_query_and_repairs_invalid_plan(tmp_path: Path) -> No
         assert "East is present in the result." in result["answer"]
         assert result["query_result"].rows[0]["region"] in {"East", "West"}
         assert provider.plan_calls == 2
+        assert [item["question"] for item in provider.last_retrieval["recent_run_context"]] == [
+            "Previous question 2",
+            "Previous question 3",
+            "Previous question 4",
+            "Previous question 5",
+            "Previous question 6",
+        ]
 
         provider.malformed_answer = True
         fallback = await run_agent(runtime, workspace["id"], "Sales by region")

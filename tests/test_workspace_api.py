@@ -40,6 +40,19 @@ def test_workspace_upload_catalog_and_delete(tmp_path: Path, monkeypatch) -> Non
         assert created.status_code == 201
         workspace_id = created.json()["id"]
 
+        renamed = client.patch(
+            f"/api/v1/workspaces/{workspace_id}", json={"name": "Revenue review"}
+        )
+        assert renamed.status_code == 200
+        assert renamed.json()["name"] == "Revenue review"
+        assert client.get("/api/v1/workspaces").json()[0]["name"] == "Revenue review"
+        assert client.patch(
+            f"/api/v1/workspaces/{workspace_id}", json={"name": "  "}
+        ).status_code == 422
+        assert client.patch(
+            "/api/v1/workspaces/missing", json={"name": "Missing workspace"}
+        ).status_code == 404
+
         run = client.post(
             f"/api/v1/workspaces/{workspace_id}/runs",
             json={"question": "Show sales by region"},

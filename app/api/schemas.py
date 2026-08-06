@@ -1,11 +1,23 @@
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class WorkspaceCreate(BaseModel):
     name: str = Field(min_length=2, max_length=120)
     description: str = Field(default="", max_length=1000)
+
+
+class WorkspaceUpdate(BaseModel):
+    name: str = Field(min_length=2, max_length=120)
+
+    @field_validator("name")
+    @classmethod
+    def normalize_name(cls, value: str) -> str:
+        name = value.strip()
+        if len(name) < 2:
+            raise ValueError("workspace name must contain at least 2 non-whitespace characters")
+        return name
 
 
 class WorkspaceView(BaseModel):
@@ -33,16 +45,6 @@ class ColumnAnnotation(BaseModel):
     aliases: list[str] = Field(default_factory=list, max_length=20)
 
 
-class ConversationCreate(BaseModel):
-    title: str = Field(default="新会话", min_length=1, max_length=120)
-
-
-class ConversationUpdate(BaseModel):
-    title: str | None = Field(default=None, min_length=1, max_length=120)
-    status: str | None = None
-
-
 class RunCreate(BaseModel):
     question: str = Field(min_length=2, max_length=2000)
     selected_table_ids: list[str] = Field(default_factory=list, max_length=12)
-    conversation_id: str | None = None

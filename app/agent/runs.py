@@ -44,6 +44,7 @@ def result_payload(state: dict[str, Any]) -> dict:
             "scope": query_result.scope if query_result else None,
             "warnings": state.get("warnings", []),
             "error": state.get("error"),
+            "selected_table_ids": state.get("selected_table_ids", []),
         }
     )
 
@@ -55,7 +56,6 @@ async def execute_run(
     workspace_id: str,
     question: str,
     selected_table_ids: list[str],
-    conversation_id: str | None = None,
 ) -> None:
     async def record_phase(phase: str) -> None:
         await repository.append_event(run_id, phase, PHASE_MESSAGES[phase])
@@ -66,7 +66,7 @@ async def execute_run(
             workspace_id,
             question,
             selected_table_ids,
-            conversation_id=conversation_id,
+            run_id=run_id,
             on_phase=record_phase,
         )
         if state.get("error"):

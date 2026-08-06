@@ -17,11 +17,10 @@ from app.analysis.chart import ChartService
 from app.analysis.service import AnalysisService
 from app.api.schemas import (
     ColumnAnnotation,
-    ConversationCreate,
-    ConversationUpdate,
     RunCreate,
     SourceView,
     WorkspaceCreate,
+    WorkspaceUpdate,
     WorkspaceView,
 )
 from app.core.config import settings
@@ -69,6 +68,17 @@ async def list_workspaces():
 async def get_workspace(workspace_id: str):
     try:
         workspace = await repository.get_workspace(workspace_id)
+    except KeyError as exc:
+        raise not_found(exc) from exc
+    workspace["source_count"] = len(await repository.list_sources(workspace_id))
+    workspace["table_count"] = len(await repository.catalog(workspace_id))
+    return workspace
+
+
+@router.patch("/workspaces/{workspace_id}", response_model=WorkspaceView)
+async def update_workspace(workspace_id: str, payload: WorkspaceUpdate):
+    try:
+        workspace = await repository.update_workspace(workspace_id, payload.name)
     except KeyError as exc:
         raise not_found(exc) from exc
     workspace["source_count"] = len(await repository.list_sources(workspace_id))
@@ -203,43 +213,6 @@ async def update_column_annotation(workspace_id: str, column_id: str, payload: C
     return column
 
 
-@router.get("/workspaces/{workspace_id}/conversations")
-async def list_conversations(workspace_id: str):
-    try:
-        await repository.get_workspace(workspace_id)
-    except KeyError as exc:
-        raise not_found(exc) from exc
-    conversations = await repository.list_conversations(workspace_id)
-    if not conversations:
-        conversations = [await repository.create_conversation(workspace_id)]
-    return {"conversations": conversations}
-
-
-@router.post("/workspaces/{workspace_id}/conversations", status_code=201)
-async def create_conversation(workspace_id: str, payload: ConversationCreate):
-    try:
-        return await repository.create_conversation(workspace_id, payload.title)
-    except KeyError as exc:
-        raise not_found(exc) from exc
-
-
-@router.patch("/conversations/{conversation_id}")
-async def update_conversation(conversation_id: str, payload: ConversationUpdate):
-    try:
-        return await repository.update_conversation(conversation_id, payload.title, payload.status)
-    except KeyError as exc:
-        raise not_found(exc) from exc
-
-
-@router.get("/conversations/{conversation_id}/runs")
-async def list_conversation_runs(conversation_id: str, limit: int = 50):
-    try:
-        await repository.get_conversation(conversation_id)
-    except KeyError as exc:
-        raise not_found(exc) from exc
-    return {"runs": await repository.list_conversation_runs(conversation_id, limit)}
-
-
 @router.post("/workspaces/{workspace_id}/runs", status_code=202)
 async def create_run(workspace_id: str, payload: RunCreate, background: BackgroundTasks):
     try:
@@ -247,7 +220,6 @@ async def create_run(workspace_id: str, payload: RunCreate, background: Backgrou
             workspace_id,
             payload.question.strip(),
             payload.selected_table_ids,
-            payload.conversation_id,
         )
     except KeyError as exc:
         raise not_found(exc) from exc
@@ -273,13 +245,12 @@ async def create_run(workspace_id: str, payload: RunCreate, background: Backgrou
         workspace_id,
         payload.question.strip(),
         payload.selected_table_ids,
-        payload.conversation_id,
     )
     return run
 
 
 @router.get("/workspaces/{workspace_id}/runs")
-async def list_runs(workspace_id: str, limit: int = 200):
+async def list_runs(workspace_id: str, limit: int = 500):
     try:
         await repository.get_workspace(workspace_id)
     except KeyError as exc:

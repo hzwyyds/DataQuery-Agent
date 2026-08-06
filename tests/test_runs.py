@@ -92,17 +92,29 @@ def test_run_persists_result_and_resumable_phase_events(tmp_path: Path) -> None:
     asyncio.run(run())
 
 
-def test_runs_are_bound_to_explicit_conversations(tmp_path: Path) -> None:
+def test_recent_context_uses_latest_five_completed_workspace_runs(tmp_path: Path) -> None:
     async def run() -> None:
         repository = Repository(tmp_path / "metadata.sqlite3")
         await repository.initialize()
-        workspace = await repository.create_workspace("Conversations")
-        first = await repository.create_conversation(workspace["id"], "雨量分析")
-        second = await repository.create_conversation(workspace["id"], "流量校验")
-        first_run = await repository.create_run(workspace["id"], "第一问", [], first["id"])
-        await repository.create_run(workspace["id"], "第二问", [], second["id"])
-        runs = await repository.list_conversation_runs(first["id"])
-        assert [item["id"] for item in runs] == [first_run["id"]]
-        assert first_run["conversation_id"] == first["id"]
+        workspace = await repository.create_workspace("Recent runs")
+        created = []
+        for index in range(7):
+            item = await repository.create_run(workspace["id"], f"问题 {index + 1}", [])
+            created.append(item)
+            await repository.complete_run(item["id"], {"answer": f"回答 {index + 1}"})
+        running = await repository.create_run(workspace["id"], "当前问题", [])
+
+        recent = await repository.list_recent_completed_runs(
+            workspace["id"], running["id"], limit=5
+        )
+
+        assert [item["question"] for item in recent] == [
+            "问题 7",
+            "问题 6",
+            "问题 5",
+            "问题 4",
+            "问题 3",
+        ]
+        assert "conversation_id" not in created[0]
 
     asyncio.run(run())

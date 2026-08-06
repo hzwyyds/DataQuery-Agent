@@ -107,6 +107,10 @@ def evaluate_case(
         failures.append(
             f"chart source_points={chart.get('source_points')} below {case['min_source_points']}"
         )
+    if chart and chart.get("displayed_points") != chart.get("source_points"):
+        failures.append("chart did not render the complete requested scope")
+    if chart and chart.get("downsampled") is not False:
+        failures.append("chart was downsampled")
     downloaded_rows = None
     if case.get("download_min_rows") and not failures:
         downloaded_rows = csv_row_count(base_url, workspace_id, run["id"])
@@ -165,7 +169,6 @@ def main() -> int:
                 {
                     "question": case["question"],
                     "selected_table_ids": [args.table_id],
-                    "conversation_id": None,
                 },
             )
             run = wait_for_run(

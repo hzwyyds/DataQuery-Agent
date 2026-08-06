@@ -32,7 +32,7 @@ def test_executor_reports_preview_truncation(tmp_path: Path) -> None:
     asyncio.run(run())
 
 
-def test_chart_sampling_and_csv_download_use_the_full_query(tmp_path: Path) -> None:
+def test_chart_and_csv_download_use_the_full_query(tmp_path: Path) -> None:
     async def run() -> None:
         storage = WorkspaceStorage(Settings(data_dir=tmp_path))
         workspace_id = str(uuid4())
@@ -45,7 +45,7 @@ def test_chart_sampling_and_csv_download_use_the_full_query(tmp_path: Path) -> N
         preview = await executor.execute(
             workspace_id, "SELECT * FROM points ORDER BY x", max_rows=100
         )
-        sampled, source_points = await executor.execute_chart(
+        chart_result = await executor.execute_chart(
             workspace_id, "SELECT * FROM points ORDER BY x"
         )
         downloaded = "".join(executor.stream_csv(workspace_id, "SELECT * FROM points ORDER BY x"))
@@ -53,9 +53,11 @@ def test_chart_sampling_and_csv_download_use_the_full_query(tmp_path: Path) -> N
 
         assert len(preview.rows) == 100
         assert preview.scope.preview_truncated is True
-        assert source_points == 1200
-        assert len(sampled.rows) == 500
-        assert sampled.rows[0]["x"] == 0
+        assert chart_result.scope.rows_read == 1200
+        assert chart_result.scope.preview_truncated is False
+        assert len(chart_result.rows) == 1200
+        assert chart_result.rows[0]["x"] == 0
+        assert chart_result.rows[-1]["x"] == 1199
         assert len(rows) == 1200
 
     asyncio.run(run())

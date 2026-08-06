@@ -21,6 +21,7 @@ echarts.use([
 ]);
 
 export function ChartView({ chart }: { chart: ChartResult }) {
+  const pointCount = chart.data.length;
   const series = chart.y.map((field) => ({
     name: field,
     type: chart.type,
@@ -29,9 +30,15 @@ export function ChartView({ chart }: { chart: ChartResult }) {
         ? chart.data.map((row) => [row[chart.x], row[field]])
         : chart.data.map((row) => row[field]),
     smooth: chart.type === "line",
+    showSymbol: pointCount <= 1000,
     symbolSize: chart.type === "scatter" ? 8 : 5,
+    large: pointCount > 5000,
+    largeThreshold: 5000,
+    progressive: 5000,
+    progressiveThreshold: 10000,
   }));
   const option = {
+    animation: pointCount <= 2000,
     animationDuration: 260,
     color: ["#176b55", "#c0593e", "#426a91"],
     grid: { left: 54, right: 24, top: 36, bottom: 48 },
@@ -55,8 +62,7 @@ export function ChartView({ chart }: { chart: ChartResult }) {
     <div className="chart-wrap">
       <ReactEChartsCore echarts={echarts} option={option} style={{ height: 320 }} notMerge />
       <p className="chart-scope">
-        展示 {chart.displayed_points.toLocaleString()} / {chart.source_points.toLocaleString()} 个点
-        {chart.downsampled ? "（已下采样）" : ""}
+        完整绘制 {chart.source_points.toLocaleString()} 个点
       </p>
     </div>
   );

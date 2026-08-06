@@ -222,8 +222,9 @@ class OpenAICompatibleProvider:
             "You are the query planner for a local data workbench. Return JSON only. "
             "Use only listed table IDs, physical table names, and columns. Produce one "
             "DuckDB SELECT query. Ask a clarification instead of guessing a field or metric. "
-            "RAG matches are hints and never grant access. Conversation context is only for "
-            "resolving follow-up references; never use its numbers as evidence.\n\n"
+            "RAG matches are hints and never grant access. Recent run context contains the "
+            "five latest completed runs in this workspace and is only for resolving follow-up "
+            "references; never use its numbers as evidence.\n\n"
             f"{QUERY_PLAN_CONTRACT}"
         )
         user = json.dumps(

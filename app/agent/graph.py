@@ -27,10 +27,10 @@ logger = logging.getLogger(__name__)
 
 
 class AgentState(TypedDict, total=False):
+    run_id: str
     workspace_id: str
     question: str
     selected_table_ids: list[str]
-    conversation_id: str | None
     catalog: list[dict]
     retrieval: dict
     planning_retrieval: dict
@@ -39,7 +39,6 @@ class AgentState(TypedDict, total=False):
     query_result: QueryResult
     analysis_input: QueryResult
     chart_input: QueryResult
-    chart_source_points: int
     analysis_result: AnalysisResult
     chart: ChartResult | None
     evidence: list[dict]
@@ -130,28 +129,22 @@ def build_agent_graph(
             catalog,
             state.get("selected_table_ids"),
         )
-        recent_runs = (
-            await runtime.repository.list_conversation_runs(state["conversation_id"], limit=6)
-            if state.get("conversation_id")
-            else []
+        recent_runs = await runtime.repository.list_recent_completed_runs(
+            state["workspace_id"], state.get("run_id", ""), limit=5
         )
-        conversation_context = [
+        recent_run_context = [
             {
                 "question": run["question"],
-                "answer": str(run.get("payload", {}).get("answer", ""))[:1000],
+                "answer": str(run.get("payload", {}).get("answer", ""))[:1500],
             }
             for run in reversed(recent_runs)
             if run["status"] == "COMPLETED"
             and run.get("payload", {}).get("answer")
-            and (
-                run.get("payload", {}).get("sql")
-                or run.get("payload", {}).get("analysis")
-            )
-        ][-3:]
+        ]
         return {
             "catalog": catalog,
             "retrieval": retrieval,
-            "planning_retrieval": {**retrieval, "conversation_context": conversation_context},
+            "planning_retrieval": {**retrieval, "recent_run_context": recent_run_context},
             "warnings": list(retrieval.get("warnings", [])),
         }
 
@@ -227,7 +220,7 @@ def build_agent_graph(
             return {}
         max_rows = 100_000_000
         if state["plan"].task == "analysis":
-            total_rows = await runtime.executor.count_rows(
+            await runtime.executor.count_rows(
                 state["workspace_id"], state["normalized_sql"], max_rows=max_rows
             )
             result = await runtime.executor.execute(
@@ -237,16 +230,16 @@ def build_agent_graph(
                 "query_result": preview_result(result),
                 "analysis_input": result,
                 "chart_input": result,
-                "chart_source_points": total_rows,
             }
         preview = await runtime.executor.execute(
             state["workspace_id"], state["normalized_sql"], max_rows=100
         )
         output: dict[str, Any] = {"query_result": preview}
         if state["plan"].chart is not None:
-            chart_input, source_points = await runtime.executor.execute_chart(
+            chart_input = await runtime.executor.execute_chart(
                 state["workspace_id"], state["normalized_sql"]
             )
+            source_points = chart_input.scope.rows_read
             preview = preview.model_copy(
                 update={
                     "scope": preview.scope.model_copy(
@@ -261,7 +254,6 @@ def build_agent_graph(
                 {
                     "query_result": preview,
                     "chart_input": chart_input,
-                    "chart_source_points": source_points,
                 }
             )
         return output
@@ -283,15 +275,7 @@ def build_agent_graph(
                 if analysis_result is not None and analysis_result.rows
                 else state.get("chart_input", state["query_result"]).rows
             )
-            chart = runtime.charts.build(
-                state["plan"].chart,
-                chart_rows,
-                source_points=(
-                    len(chart_rows)
-                    if analysis_result is not None and analysis_result.rows
-                    else state.get("chart_source_points")
-                ),
-            )
+            chart = runtime.charts.build(state["plan"].chart, chart_rows)
         except (AnalysisError, ChartError) as exc:
             return {"error": str(exc)}
         scope = state["query_result"].scope.model_copy(
@@ -362,16 +346,16 @@ async def run_agent(
     workspace_id: str,
     question: str,
     selected_table_ids: list[str] | None = None,
-    conversation_id: str | None = None,
+    run_id: str = "",
     on_phase: Callable[[str], Awaitable[None]] | None = None,
 ) -> dict[str, Any]:
     graph = build_agent_graph(runtime, on_phase)
     state = await graph.ainvoke(
         {
+            "run_id": run_id,
             "workspace_id": workspace_id,
             "question": question,
             "selected_table_ids": selected_table_ids or [],
-            "conversation_id": conversation_id,
         }
     )
     return state

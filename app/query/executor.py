@@ -115,48 +115,21 @@ class DuckDBQueryExecutor:
         workspace_id: str,
         sql: str,
         *,
-        max_points: int = 500,
         max_rows: int = 100_000_000,
-    ) -> tuple[QueryResult, int]:
+    ) -> QueryResult:
         source_points = await self.count_rows(workspace_id, sql, max_rows=max_rows)
-        if source_points <= max_points:
-            return (
-                await self.execute(workspace_id, sql, max_rows=max_points),
-                source_points,
-            )
-        sampled_sql = f"""
-        WITH dataquery_source AS ({sql.rstrip(";")}),
-        dataquery_numbered AS (
-            SELECT *,
-                   ROW_NUMBER() OVER () AS __dataquery_row,
-                   COUNT(*) OVER () AS __dataquery_total
-            FROM dataquery_source
-        ),
-        dataquery_bucketed AS (
-            SELECT *,
-                   FLOOR((__dataquery_row - 1) * {max_points} / __dataquery_total)
-                       AS __dataquery_bucket
-            FROM dataquery_numbered
-        ),
-        dataquery_sampled AS (
-            SELECT *,
-                   ROW_NUMBER() OVER (
-                       PARTITION BY __dataquery_bucket ORDER BY __dataquery_row
-                   ) AS __dataquery_bucket_row
-            FROM dataquery_bucketed
+        result = await self.execute(workspace_id, sql, max_rows=max_rows)
+        return result.model_copy(
+            update={
+                "scope": result.scope.model_copy(
+                    update={
+                        "rows_read": source_points,
+                        "rows_returned": len(result.rows),
+                        "preview_truncated": False,
+                    }
+                )
+            }
         )
-        SELECT * EXCLUDE (
-            __dataquery_row,
-            __dataquery_total,
-            __dataquery_bucket,
-            __dataquery_bucket_row
-        )
-        FROM dataquery_sampled
-        WHERE __dataquery_bucket_row = 1
-        ORDER BY __dataquery_row
-        """
-        sampled = await self.execute(workspace_id, sampled_sql, max_rows=max_points)
-        return sampled, source_points
 
     def stream_csv(self, workspace_id: str, sql: str, batch_size: int = 10_000):
         connection = self.connect(workspace_id)

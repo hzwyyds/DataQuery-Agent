@@ -8,15 +8,6 @@ export type Workspace = {
   table_count: number;
 };
 
-export type Conversation = {
-  id: string;
-  workspace_id: string;
-  title: string;
-  status: "ACTIVE" | "ARCHIVED";
-  created_at: string;
-  updated_at: string;
-};
-
 export type Source = {
   id: string;
   workspace_id: string;
@@ -100,7 +91,6 @@ export type RunPayload = {
 export type Run = {
   id: string;
   workspace_id: string;
-  conversation_id: string | null;
   question: string;
   status: "RUNNING" | "COMPLETED" | "FAILED";
   payload: RunPayload;

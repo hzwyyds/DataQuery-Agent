@@ -25,7 +25,6 @@ import { MarkdownText } from "./MarkdownText";
 import type {
   CatalogColumn,
   CatalogTable,
-  Conversation,
   RagStatus,
   Run,
   RunEvent,
@@ -234,10 +233,10 @@ export function App() {
   const [sources, setSources] = useState<Source[]>([]);
   const [catalog, setCatalog] = useState<CatalogTable[]>([]);
   const [runs, setRuns] = useState<Run[]>([]);
-  const [conversations, setConversations] = useState<Conversation[]>([]);
-  const [conversationId, setConversationId] = useState("");
   const [ragStatus, setRagStatus] = useState<RagStatus | null>(null);
   const [newWorkspace, setNewWorkspace] = useState("");
+  const [editingWorkspace, setEditingWorkspace] = useState<string | null>(null);
+  const [workspaceDraft, setWorkspaceDraft] = useState("");
   const [question, setQuestion] = useState("");
   const [selectedTables, setSelectedTables] = useState<string[]>([]);
   const [expandedTables, setExpandedTables] = useState<string[]>([]);
@@ -258,19 +257,15 @@ export function App() {
 
   const loadWorkspace = useCallback(async (id: string) => {
     if (!id) return;
-    const [sourceItems, catalogResult, history, status, conversationResult] = await Promise.all([
+    const [sourceItems, catalogResult, history, status] = await Promise.all([
       api.sources(id),
       api.catalog(id),
       api.runs(id),
       api.ragStatus(id),
-      api.conversations(id),
     ]);
     setSources(sourceItems);
     setCatalog(catalogResult.tables);
     setRuns(history.runs);
-    setConversations(conversationResult.conversations);
-    const latestConversationId = history.runs.find((run) => run.conversation_id)?.conversation_id;
-    setConversationId((current) => current || latestConversationId || conversationResult.conversations[0]?.id || "");
     setRagStatus(status);
     setExpandedTables(catalogResult.tables.map((table) => table.id));
   }, []);
@@ -283,7 +278,6 @@ export function App() {
     setActiveRun(null);
     setEvents([]);
     setSelectedTables([]);
-    setConversationId("");
     loadWorkspace(workspaceId).catch((cause: Error) => setError(cause.message));
   }, [loadWorkspace, workspaceId]);
 
@@ -309,6 +303,8 @@ export function App() {
       ]);
       setActiveRun(run);
       setEvents(persistedEvents);
+      setQuestion(run.question);
+      setSelectedTables(run.payload.selected_table_ids ?? []);
       setTab("answer");
     } catch (cause) {
       setError((cause as Error).message);
@@ -350,16 +346,19 @@ export function App() {
     }
   }
 
-  async function createConversation() {
-    if (!workspaceId) return;
-    setBusy("conversation");
+  async function renameWorkspace(workspaceIdToRename: string) {
+    const name = workspaceDraft.trim();
+    if (name.length < 2) {
+      setError("工作区名称至少需要 2 个字符。");
+      return;
+    }
+    setBusy("workspace-rename");
+    setError("");
     try {
-      const conversation = await api.createConversation(workspaceId);
-      setConversations((items) => [conversation, ...items]);
-      setConversationId(conversation.id);
-      setRuns([]);
-      setActiveRun(null);
-      setEvents([]);
+      await api.updateWorkspace(workspaceIdToRename, name);
+      setEditingWorkspace(null);
+      setWorkspaceDraft("");
+      await loadWorkspaces();
     } catch (cause) {
       setError((cause as Error).message);
     } finally {
@@ -394,7 +393,7 @@ export function App() {
     setEvents([]);
     setTab("answer");
     try {
-      const run = await api.createRun(workspaceId, question.trim(), selectedTables, conversationId);
+      const run = await api.createRun(workspaceId, question.trim(), selectedTables);
       setActiveRun(run);
       subscribe(run.id);
     } catch (cause) {
@@ -438,70 +437,95 @@ export function App() {
       </header>
 
       <aside className="workspace-rail">
-        <div className="rail-heading"><span>工作区</span><span>{workspaces.length}</span></div>
-        <nav className="workspace-list" aria-label="工作区">
-          {workspaces.map((item) => (
-            <button
-              key={item.id}
-              className={item.id === workspaceId ? "workspace-item active" : "workspace-item"}
-              onClick={() => setWorkspaceId(item.id)}
-            >
-              <Database size={15} />
-              <span><strong>{item.name}</strong><small>{item.table_count} 张表</small></span>
-            </button>
-          ))}
-        </nav>
-        <div className="new-workspace">
-          <input
-            value={newWorkspace}
-            onChange={(event) => setNewWorkspace(event.target.value)}
-            onKeyDown={(event) => event.key === "Enter" && createWorkspace()}
-            placeholder="新建工作区"
-            aria-label="新建工作区名称"
-          />
-          <button className="icon-button" onClick={createWorkspace} title="创建工作区" aria-label="创建工作区">
-            {busy === "workspace" ? <LoaderCircle className="spin" size={16} /> : <CirclePlus size={16} />}
-          </button>
-        </div>
-        <div className="history-block conversation-block">
-          <div className="rail-heading">
-            <span>会话</span>
-            <button className="icon-button" onClick={createConversation} disabled={busy === "conversation"} title="新建会话" aria-label="新建会话">
-              {busy === "conversation" ? <LoaderCircle className="spin" size={14} /> : <CirclePlus size={14} />}
+        <section className="rail-section workspace-section" aria-label="工作区列表">
+          <div className="rail-heading"><span>工作区</span><span>{workspaces.length}</span></div>
+          <nav className="workspace-list" aria-label="工作区">
+            {workspaces.map((item) => {
+              const editing = editingWorkspace === item.id;
+              return (
+                <div className={item.id === workspaceId ? "workspace-row active" : "workspace-row"} key={item.id}>
+                  {editing ? (
+                    <form
+                      className="workspace-editor"
+                      onSubmit={(event) => {
+                        event.preventDefault();
+                        renameWorkspace(item.id);
+                      }}
+                    >
+                      <input
+                        autoFocus
+                        aria-label={`修改 ${item.name} 的名称`}
+                        maxLength={120}
+                        value={workspaceDraft}
+                        onChange={(event) => setWorkspaceDraft(event.target.value)}
+                        onKeyDown={(event) => {
+                          if (event.key === "Escape") {
+                            setEditingWorkspace(null);
+                            setWorkspaceDraft("");
+                          }
+                        }}
+                      />
+                      <button className="workspace-action" type="submit" disabled={busy === "workspace-rename" || workspaceDraft.trim().length < 2} title="保存名称" aria-label="保存工作区名称">
+                        {busy === "workspace-rename" ? <LoaderCircle className="spin" size={14} /> : <Check size={14} />}
+                      </button>
+                      <button className="workspace-action" type="button" onClick={() => { setEditingWorkspace(null); setWorkspaceDraft(""); }} title="取消修改" aria-label="取消修改工作区名称">
+                        <X size={14} />
+                      </button>
+                    </form>
+                  ) : (
+                    <>
+                      <button
+                        className={item.id === workspaceId ? "workspace-item active" : "workspace-item"}
+                        onClick={() => setWorkspaceId(item.id)}
+                        title={item.name}
+                      >
+                        <Database size={15} />
+                        <span><strong>{item.name}</strong><small>{item.table_count} 张表</small></span>
+                      </button>
+                      <button
+                        className="workspace-action workspace-rename"
+                        onClick={() => { setEditingWorkspace(item.id); setWorkspaceDraft(item.name); }}
+                        title="修改工作区名称"
+                        aria-label={`修改工作区名称：${item.name}`}
+                      >
+                        <Pencil size={13} />
+                      </button>
+                    </>
+                  )}
+                </div>
+              );
+            })}
+          </nav>
+          <div className="new-workspace">
+            <input
+              value={newWorkspace}
+              onChange={(event) => setNewWorkspace(event.target.value)}
+              onKeyDown={(event) => event.key === "Enter" && createWorkspace()}
+              placeholder="新建工作区"
+              aria-label="新建工作区名称"
+            />
+            <button className="icon-button" onClick={createWorkspace} title="创建工作区" aria-label="创建工作区">
+              {busy === "workspace" ? <LoaderCircle className="spin" size={16} /> : <CirclePlus size={16} />}
             </button>
           </div>
-          <nav className="conversation-list" aria-label="会话列表">
-            {conversations.map((conversation) => (
+        </section>
+        <section className="rail-section history-section" aria-label="最近运行">
+          <div className="rail-heading"><span>最近运行</span><span>{runs.length}</span></div>
+          <nav className="history-list" aria-label="最近运行列表">
+            {runs.map((run) => (
               <button
-                key={conversation.id}
-                className={conversation.id === conversationId ? "conversation-item active" : "conversation-item"}
-                onClick={async () => {
-                  setConversationId(conversation.id);
-                  const history = await api.runs(workspaceId);
-                  setRuns(history.runs.filter((run) => run.conversation_id === conversation.id));
-                  setActiveRun(null);
-                  setEvents([]);
-                }}
+                key={run.id}
+                className={run.id === activeRun?.id ? "history-item active" : "history-item"}
+                onClick={() => selectRun(run.id)}
+                title={run.question}
+                aria-label={`载入历史运行：${run.question}`}
               >
-                <Sparkles size={13} />
-                <span>{conversation.title}</span>
+                <StatusDot status={run.status} />
+                <span><strong>{run.question}</strong><small>{formatTime(run.created_at)}</small></span>
               </button>
             ))}
           </nav>
-        </div>
-        <div className="history-block">
-          <div className="rail-heading"><span>最近运行</span></div>
-          {runs.filter((run) => !conversationId || run.conversation_id === conversationId).map((run) => (
-            <button
-              key={run.id}
-              className="history-item"
-              onClick={() => selectRun(run.id)}
-            >
-              <StatusDot status={run.status} />
-              <span><strong>{run.question}</strong><small>{formatTime(run.created_at)}</small></span>
-            </button>
-          ))}
-        </div>
+        </section>
       </aside>
 
       <main className="workbench">
