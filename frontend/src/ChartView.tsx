@@ -7,6 +7,8 @@ import {
 import * as echarts from "echarts/core";
 import { CanvasRenderer } from "echarts/renderers";
 import ReactEChartsCore from "echarts-for-react/lib/core";
+import { Download } from "lucide-react";
+import { useRef } from "react";
 
 import type { ChartResult } from "./types";
 
@@ -21,7 +23,9 @@ echarts.use([
 ]);
 
 export function ChartView({ chart }: { chart: ChartResult }) {
+  const chartRef = useRef<ReactEChartsCore>(null);
   const pointCount = chart.data.length;
+  const yAxisName = chart.y.length === 1 ? chart.y[0] : `数值（${chart.y.join("、")}）`;
   const series = chart.y.map((field) => ({
     name: field,
     type: chart.type,
@@ -47,20 +51,47 @@ export function ChartView({ chart }: { chart: ChartResult }) {
     xAxis: {
       type: chart.type === "scatter" ? "value" : "category",
       data: chart.type === "scatter" ? undefined : chart.data.map((row) => row[chart.x]),
+      name: chart.x,
+      nameLocation: "middle",
+      nameGap: 30,
       axisLabel: { color: "#68716c", hideOverlap: true },
       axisLine: { lineStyle: { color: "#cfd5d1" } },
     },
     yAxis: {
       type: "value",
+      name: yAxisName,
+      nameLocation: "middle",
+      nameGap: 42,
+      nameTextStyle: { color: "#68716c", align: "center" },
       axisLabel: { color: "#68716c" },
       splitLine: { lineStyle: { color: "#e8ebe8" } },
     },
     series,
   };
 
+  function downloadImage() {
+    const instance = chartRef.current?.getEchartsInstance();
+    if (!instance) return;
+    const url = instance.getDataURL({
+      type: "png",
+      pixelRatio: 2,
+      backgroundColor: "#ffffff",
+    });
+    const link = document.createElement("a");
+    link.download = `dataquery-${chart.type}-${chart.x}.png`;
+    link.href = url;
+    link.click();
+  }
+
   return (
     <div className="chart-wrap">
-      <ReactEChartsCore echarts={echarts} option={option} style={{ height: 320 }} notMerge />
+      <ReactEChartsCore ref={chartRef} echarts={echarts} option={option} style={{ height: 360 }} notMerge />
+      <div className="chart-actions">
+        <button className="compact-button" type="button" onClick={downloadImage} title="下载图表图片">
+          <Download size={14} />
+          下载图片
+        </button>
+      </div>
       <p className="chart-scope">
         完整绘制 {chart.source_points.toLocaleString()} 个点
       </p>

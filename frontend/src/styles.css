@@ -217,6 +217,7 @@ button:disabled { cursor: not-allowed; opacity: .48; }
 .metrics-row small { color: #78827c; font-size: 9px; text-transform: uppercase; }
 .metrics-row strong { font-size: 14px; }
 .chart-wrap { margin-top: 20px; border-top: 1px solid #e4e8e5; padding-top: 12px; }
+.chart-actions { display: flex; justify-content: flex-end; margin: 4px 0 6px; }
 .chart-loading { display: grid; min-height: 320px; place-content: center; color: #7a847e; font-size: 11px; }
 .chart-scope { margin: 0; color: #7a847e; font-size: 10px; text-align: right; }
 .scope-line { gap: 14px; min-height: 36px; padding: 0 12px; color: #77817b; border-bottom: 1px solid #e5e9e6; font-size: 10px; }
