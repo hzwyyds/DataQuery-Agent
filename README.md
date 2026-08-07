@@ -1,100 +1,46 @@
 # DataQuery Agent
 
-DataQuery Agent is a local-first workbench for asking questions of CSV, TSV, XLS, XLSX, and Parquet data.
-It turns natural language into a guarded DuckDB query, optional constrained analysis, evidence-backed
-answers, and ECharts visualization.
+DataQuery Agent 是一个本地优先的自然语言数据查询与分析工作台。用户上传 CSV、TSV、XLS、XLSX 或 Parquet 文件后，可以直接用中文提问，系统会自动完成字段检索、SQL 查询、统计分析和可视化，并展示 SQL、证据与执行轨迹。
 
-It is a substantial refactor of [didilili/shopkeeper-agent](https://github.com/didilili/shopkeeper-agent).
-The exact upstream revision and MIT attribution are in [NOTICE.md](NOTICE.md).
+项目基于 [didilili/shopkeeper-agent](https://github.com/didilili/shopkeeper-agent) 重构，具体来源、基准提交和 MIT 许可证说明见 [NOTICE.md](NOTICE.md)。
 
-![DataQuery workbench](docs/images/workbench.png)
+## 核心架构
 
-## Architecture
-
-```mermaid
-flowchart LR
-  U["Files"] --> I["Ingestion and profiling"]
-  I --> D["DuckDB tables"]
-  I --> C["SQLite catalog"]
-  C --> E["TEI embeddings"] --> Q["Qdrant index"]
-  X["Question"] --> R["Hybrid retrieval"]
-  Q --> R
-  C --> R
-  R --> P["Structured QueryPlan"] --> G["SQL guard"] --> D
-  D --> A["Constrained analysis"] --> V["Evidence"]
-  D --> V --> S["Grounded answer and chart"]
+```text
+上传文件
+  -> DuckDB 建表与数据画像
+  -> SQLite 保存工作区和运行记录
+  -> TEI 生成字段向量，Qdrant 保存目录索引
+  -> 混合检索定位相关表和字段
+  -> LangGraph 生成结构化查询/分析计划
+  -> sqlglot 校验只读 SQL
+  -> DuckDB/Pandas 确定性计算
+  -> 生成证据、中文回答和 ECharts 图表
 ```
 
-RAG only locates relevant table and column semantics. DuckDB and Pandas produce facts; the LLM
-plans and expresses an answer but cannot use catalog text as numerical evidence.
+RAG 只负责定位表、字段和语义说明，不直接生成数值结论；所有数字均来自 DuckDB 或 Pandas 的执行结果。支持描述统计、分组聚合、相关性、趋势、IQR 异常检测以及受限领域公式分析。
 
-## Five-Minute Demo
+主要技术：FastAPI、LangGraph、DuckDB、SQLite、Pandas、sqlglot、Qdrant、HuggingFace TEI、React、TypeScript、ECharts、Docker Compose。
 
-Prerequisites: Docker Desktop with Compose. The first start downloads the embedding model to a
-named Docker volume; no model file is stored in Git.
+## Docker 部署
+
+环境要求：Docker Desktop（包含 Docker Compose）。首次启动时，TEI 会将 `BAAI/bge-small-zh-v1.5` 下载到 Docker 数据卷，模型文件不会进入 Git。
 
 ```powershell
 Copy-Item .env.example .env
-# Set LLM_API_KEY in .env for natural-language runs.
+# 编辑 .env，填写 LLM_API_KEY
 docker compose up --build
 ```
 
-Open [http://127.0.0.1:5173](http://127.0.0.1:5173), create a workspace, upload CSV/TSV/XLS/XLSX/Parquet
-files under `evaluations/data/`, and ask for sales by region or a monthly sales trend. A single
-file is limited to 50 MB and a workspace to 200 MB.
+启动后访问：
 
-| Service | Host address |
-| --- | --- |
-| Workbench | `127.0.0.1:5173` |
-| API | `127.0.0.1:8000` |
-| Qdrant | `127.0.0.1:6333` |
-| TEI | `127.0.0.1:8081` |
+- 工作台：http://127.0.0.1:5173
+- API：http://127.0.0.1:8000
+- 存活检查：http://127.0.0.1:8000/health
+- 就绪检查：http://127.0.0.1:8000/ready
 
-`/health` reports process liveness. `/ready` separately reports SQLite, DuckDB, Qdrant, and TEI.
-All Compose ports are loopback-only.
+Qdrant 和 TEI 也只绑定本机回环地址。创建工作区后上传数据文件即可开始提问；单文件最大 50 MB，单工作区最大 200 MB。表格只展示预览行，完整查询结果支持 CSV 下载，图表支持 PNG 下载。
 
-## Local Development
+## 运行边界
 
-```powershell
-uv sync --dev
-uv run pytest -q
-uv run uvicorn app.main:app --host 127.0.0.1 --port 8000
-```
-
-In another terminal:
-
-```powershell
-Set-Location frontend
-pnpm install --ignore-scripts
-node node_modules/typescript/bin/tsc --noEmit
-node node_modules/vite/bin/vite.js --host 127.0.0.1 --port 5173
-```
-
-## Evaluation
-
-- 50 bilingual catalog retrieval cases with Recall@5 and MRR gates.
-- 40 golden query cases with guarded-plan validity, execution success, and numerical grounding gates.
-- Workspace-isolation, idempotent indexing, annotation, fallback, and unsafe-SQL checks.
-
-Run deterministic checks with `uv run pytest -q tests/test_evaluations.py tests/test_rag.py`.
-With Qdrant and TEI running, `uv run python evaluations/run_retrieval_live.py` writes a fresh,
-ignored live-vector report under `artifacts/`. No upstream RAG metric is inherited. See
-[evaluations/README.md](evaluations/README.md) for the distinction between offline and live runs.
-
-## Limits And Security
-
-- Local single-user tool only: no multi-tenancy, external database connections, reconciliation
-  rules, reports, or arbitrary Python execution.
-- `sqlglot` accepts a single catalog-checked read-only query. DuckDB external access is disabled,
-  and query/analysis/chart limits are enforced.
-- RAG failure is explicit: the API and workbench show lexical fallback or indexing failure.
-- Analysis requests are planned by the LLM as an allowlisted formula and intent, then computed by
-  Pandas for descriptive statistics, group aggregation, correlation, trend, or IQR outliers.
-- User data, `.env`, logs, caches, model files, and evaluation output are ignored by Git.
-
-## Resume Description
-
-Built a local-first natural-language data analysis Agent using FastAPI, LangGraph, DuckDB, SQLite,
-Qdrant, TEI, React, and ECharts. Implemented workspace-scoped catalog RAG, guarded SQL execution,
-constrained analysis/chart contracts, evidence-backed answers, SSE decision traces, reproducible
-Docker Compose deployment, and 50 retrieval plus 40 grounded-query evaluation cases.
+这是面向本地单用户场景的工具，不提供公网多租户、外部数据库连接或任意 Python 代码执行。Qdrant/TEI 不可用时会明确显示词法检索降级状态，不会伪装成向量检索成功。
