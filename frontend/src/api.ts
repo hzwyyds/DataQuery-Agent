@@ -41,6 +41,8 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name }),
     }),
+  deleteWorkspace: (workspaceId: string) =>
+    request<void>(`/api/v1/workspaces/${workspaceId}`, { method: "DELETE" }),
   sources: (workspaceId: string) =>
     request<Source[]>(`/api/v1/workspaces/${workspaceId}/sources`),
   catalog: (workspaceId: string) =>

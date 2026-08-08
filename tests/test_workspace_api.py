@@ -112,6 +112,10 @@ def test_workspace_upload_catalog_and_delete(tmp_path: Path, monkeypatch) -> Non
         assert deleted.status_code == 204
         assert client.get(f"/api/v1/workspaces/{workspace_id}/catalog").json() == {"tables": []}
 
+        deleted_workspace = client.delete(f"/api/v1/workspaces/{workspace_id}")
+        assert deleted_workspace.status_code == 204
+        assert client.get(f"/api/v1/workspaces/{workspace_id}").status_code == 404
+
 
 def test_chinese_xlsx_upload_and_run_download(tmp_path: Path, monkeypatch) -> None:
     config = Settings(data_dir=tmp_path)

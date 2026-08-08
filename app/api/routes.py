@@ -89,6 +89,9 @@ async def update_workspace(workspace_id: str, payload: WorkspaceUpdate):
 @router.delete("/workspaces/{workspace_id}", status_code=204)
 async def delete_workspace(workspace_id: str):
     try:
+        await repository.get_workspace(workspace_id)
+        if rag.config.rag_enabled:
+            await rag.vectors.delete_workspace(workspace_id)
         await repository.delete_workspace(workspace_id)
     except KeyError as exc:
         raise not_found(exc) from exc

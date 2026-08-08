@@ -88,6 +88,16 @@ class QdrantCatalogRepository:
                 wait=True,
             )
 
+    async def delete_workspace(self, workspace_id: str) -> None:
+        if await self.client.collection_exists(COLLECTION):
+            await self.client.delete(
+                collection_name=COLLECTION,
+                points_selector=models.FilterSelector(
+                    filter=self._scope_filter(workspace_id),
+                ),
+                wait=True,
+            )
+
     async def search(
         self,
         workspace_id: str,

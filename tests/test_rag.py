@@ -61,6 +61,24 @@ def test_qdrant_filter_isolates_workspaces_and_replace_is_idempotent(tmp_path: P
     asyncio.run(run())
 
 
+def test_qdrant_workspace_delete_removes_only_that_workspace(tmp_path: Path) -> None:
+    async def run() -> None:
+        config = Settings(data_dir=tmp_path, embedding_size=4)
+        client = AsyncQdrantClient(":memory:")
+        vectors = QdrantCatalogRepository(config, client)
+        await vectors.replace_source("workspace-a", "a", [[1, 0, 0, 0]], [payload("a", "sales")])
+        await vectors.replace_source("workspace-b", "b", [[1, 0, 0, 0]], [payload("b", "secret")])
+
+        await vectors.delete_workspace("workspace-a")
+
+        remaining, _ = await client.scroll(collection_name=COLLECTION, limit=20)
+        assert len(remaining) == 1
+        assert remaining[0].payload["workspace_id"] == "workspace-b"
+        await client.close()
+
+    asyncio.run(run())
+
+
 def test_index_and_retrieve_catalog_with_explicit_fallback(tmp_path: Path) -> None:
     async def run() -> None:
         config = Settings(

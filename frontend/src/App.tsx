@@ -252,7 +252,9 @@ export function App() {
   const loadWorkspaces = useCallback(async () => {
     const items = await api.workspaces();
     setWorkspaces(items);
-    setWorkspaceId((current) => current || items[0]?.id || "");
+    setWorkspaceId((current) =>
+      current && items.some((item) => item.id === current) ? current : items[0]?.id || "",
+    );
   }, []);
 
   const loadWorkspace = useCallback(async (id: string) => {
@@ -278,6 +280,13 @@ export function App() {
     setActiveRun(null);
     setEvents([]);
     setSelectedTables([]);
+    if (!workspaceId) {
+      setSources([]);
+      setCatalog([]);
+      setRuns([]);
+      setRagStatus(null);
+      return;
+    }
     loadWorkspace(workspaceId).catch((cause: Error) => setError(cause.message));
   }, [loadWorkspace, workspaceId]);
 
@@ -359,6 +368,27 @@ export function App() {
       setEditingWorkspace(null);
       setWorkspaceDraft("");
       await loadWorkspaces();
+    } catch (cause) {
+      setError((cause as Error).message);
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function deleteWorkspace(workspaceIdToDelete: string, name: string) {
+    if (!confirm(`确定删除工作区“${name}”吗？其中的文件、目录和运行记录都会被删除。`)) return;
+    setBusy("workspace-delete");
+    setError("");
+    try {
+      const wasCurrent = workspaceId === workspaceIdToDelete;
+      await api.deleteWorkspace(workspaceIdToDelete);
+      await loadWorkspaces();
+      if (wasCurrent) {
+        setActiveRun(null);
+        setEvents([]);
+        setQuestion("");
+        setSelectedTables([]);
+      }
     } catch (cause) {
       setError((cause as Error).message);
     } finally {
@@ -489,6 +519,16 @@ export function App() {
                         aria-label={`修改工作区名称：${item.name}`}
                       >
                         <Pencil size={13} />
+                      </button>
+                      <button
+                        className="workspace-action workspace-delete danger"
+                        type="button"
+                        disabled={busy === "workspace-delete"}
+                        onClick={() => deleteWorkspace(item.id, item.name)}
+                        title="删除工作区"
+                        aria-label={`删除工作区：${item.name}`}
+                      >
+                        {busy === "workspace-delete" ? <LoaderCircle className="spin" size={13} /> : <Trash2 size={13} />}
                       </button>
                     </>
                   )}
